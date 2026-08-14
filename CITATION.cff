@@ -5,5 +5,5 @@ type: software
 authors:
   - family-names: Baldera
     given-names: Francisco
-license: MIT
+license: GPL-3.0-or-later
 # repository-code: fill in once the project has a public git remote

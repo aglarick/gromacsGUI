@@ -7,7 +7,7 @@ name = "gromacs-gui"
 version = "0.1.0"
 description = "A desktop GUI that wraps GROMACS molecular dynamics simulation setup and execution"
 readme = "README.md"
-license = "MIT"
+license = "GPL-3.0-or-later"
 requires-python = ">=3.11"
 authors = [{ name = "Francisco Baldera" }]
 dependencies = [

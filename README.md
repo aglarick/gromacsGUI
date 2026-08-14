@@ -41,4 +41,6 @@ pytest -m "not requires_gmx"
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+GPLv3 — see [LICENSE](LICENSE). Chosen so that anyone who builds on GromacsGUI (including
+forks that add features) must keep their version open and share their source, rather than
+turning it into a closed competing product.
