@@ -3,9 +3,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFileDialog,
-    QHBoxLayout,
+    QLabel,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -13,8 +14,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from gromacs_gui.gmx.runner import GmxProcessRunner
-from gromacs_gui.ui.widgets.log_console import LogConsole
+from gromacs_gui.core.project import Project
+from gromacs_gui.ui.wizard.wizard_window import WizardWindow
 from gromacs_gui.utils.settings import (
     GmxEnvironmentError,
     Settings,
@@ -27,39 +28,57 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("GromacsGUI")
-        self.resize(900, 600)
+        self.resize(1000, 650)
 
         self.settings = Settings.load()
-        self.runner = GmxProcessRunner(self)
-        self.runner.output_line.connect(self._on_output_line)
-        self.runner.finished.connect(self._on_finished)
-        self.runner.cancelled.connect(self._on_cancelled)
-        self.runner.error_occurred.connect(self._on_error)
+        self.project: Project | None = None
+        self.gmx_env: dict[str, str] | None = None
 
-        self.log_console = LogConsole(self)
-        self.run_button = QPushButton("Run gmx --version")
-        self.run_button.clicked.connect(self._on_run_version_clicked)
+        self.setCentralWidget(self._build_welcome_page())
 
-        button_row = QHBoxLayout()
-        button_row.addWidget(self.run_button)
-        button_row.addStretch(1)
+    def _build_welcome_page(self) -> QWidget:
+        page = QWidget(self)
+        title = QLabel("GromacsGUI", page)
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        subtitle = QLabel(
+            "Choose an empty folder to start a new simulation project, or an\n"
+            "existing project folder to resume it.",
+            page,
+        )
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        open_button = QPushButton("Open or Create Project Folder…", page)
+        open_button.clicked.connect(self._on_open_project_clicked)
 
-        central = QWidget(self)
-        layout = QVBoxLayout(central)
-        layout.addLayout(button_row)
-        layout.addWidget(self.log_console)
-        self.setCentralWidget(central)
+        layout = QVBoxLayout(page)
+        layout.addStretch(1)
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addWidget(open_button, alignment=Qt.AlignmentFlag.AlignCenter)
+        layout.addStretch(1)
+        return page
 
-    def _on_run_version_clicked(self) -> None:
-        if self.runner.is_running:
-            return
+    def _on_open_project_clicked(self) -> None:
         env = self._ensure_gmx_configured()
         if env is None:
             return
-        gmx_path = find_gmx_binary(env) or "gmx"
-        self.log_console.clear_log()
-        self.run_button.setEnabled(False)
-        self.runner.start(gmx_path, ["--version"], env=env)
+
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select or create a project folder", str(Path.home())
+        )
+        if not folder:
+            return
+
+        root = Path(folder)
+        has_manifest = (root / "project.json").is_file()
+        try:
+            project = Project.open(root) if has_manifest else Project.create(root)
+        except OSError as exc:
+            QMessageBox.critical(self, "Project error", str(exc))
+            return
+
+        self.project = project
+        self.gmx_env = env
+        self.setCentralWidget(WizardWindow(project, env, self))
 
     def _ensure_gmx_configured(self) -> dict[str, str] | None:
         if self.settings.gmxrc_path:
@@ -88,18 +107,3 @@ class MainWindow(QMainWindow):
         self.settings.gmxrc_path = path
         self.settings.save()
         return env
-
-    def _on_output_line(self, text: str, stream: str) -> None:
-        self.log_console.append_line(text, stream)
-
-    def _on_finished(self, exit_code: int) -> None:
-        self.log_console.append_line(f"[gmx exited with code {exit_code}]", "info")
-        self.run_button.setEnabled(True)
-
-    def _on_cancelled(self) -> None:
-        self.log_console.append_line("[cancelled]", "info")
-        self.run_button.setEnabled(True)
-
-    def _on_error(self, message: str) -> None:
-        self.log_console.append_line(f"[error] {message}", "stderr")
-        self.run_button.setEnabled(True)
