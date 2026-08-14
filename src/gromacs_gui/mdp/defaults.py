@@ -7,6 +7,7 @@ from gromacs_gui.mdp.mdp_model import MdpFile
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 _STAGE_TEMPLATE_NAMES = {
+    "ions": "ions.mdp",
     "em": "em.mdp",
     "nvt": "nvt.mdp",
     "npt": "npt.mdp",

@@ -58,6 +58,18 @@ def resolve_gmx_environment(gmxrc_path: str | Path) -> dict[str, str]:
     return env
 
 
+def with_gmx_defaults(env: dict[str, str]) -> dict[str, str]:
+    """Copy of env with GROMACS's own numbered-backup-file feature disabled.
+
+    Project already tracks step history via numbered step folders + the
+    manifest, so GROMACS's own `#file.N#` backups would just be clutter
+    inside those folders.
+    """
+    result = dict(env)
+    result["GMX_MAXBACKUP"] = "-1"
+    return result
+
+
 def find_gmx_binary(env: dict[str, str]) -> str | None:
     """Locate the gmx executable using PATH from a (possibly GMXRC-sourced) environment."""
     for directory in env.get("PATH", "").split(os.pathsep):

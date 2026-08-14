@@ -1,0 +1,18 @@
+; ions.mdp - minimal run parameters used only to build a .tpr for gmx genion
+; Starting point adapted from the widely-used GROMACS community tutorials by
+; Justin Lemkul (http://www.mdtutorials.com/gmx/). This file is never
+; actually run as dynamics; grompp just needs enough here to preprocess the
+; topology before genion replaces solvent molecules with ions.
+
+integrator      = steep
+emtol           = 1000.0
+emstep          = 0.01
+nsteps          = 50000
+
+cutoff-scheme   = Verlet
+nstlist         = 1
+ns_type         = grid
+coulombtype     = cutoff
+rcoulomb        = 1.0
+rvdw            = 1.0
+pbc             = xyz
