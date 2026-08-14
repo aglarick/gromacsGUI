@@ -1,0 +1,57 @@
+; npt.mdp - NPT equilibration (constant Number, Pressure, Temperature)
+; Starting point adapted from the widely-used GROMACS community tutorials by
+; Justin Lemkul (http://www.mdtutorials.com/gmx/) - review and adjust these
+; values for your own system before relying on them.
+
+title                   = NPT equilibration
+define                  = -DPOSRES   ; keep restraining heavy atoms during pressure equilibration
+
+; Run control
+integrator              = md
+nsteps                  = 50000      ; 2 fs * 50000 = 100 ps
+dt                      = 0.002
+
+; Output control
+nstxout                 = 500
+nstvout                 = 500
+nstenergy               = 500
+nstlog                  = 500
+
+; Bond constraints
+continuation            = yes        ; continuing from NVT equilibration
+constraint_algorithm    = lincs
+constraints             = h-bonds
+lincs_iter              = 1
+lincs_order             = 4
+
+; Neighbor searching
+cutoff-scheme           = Verlet
+ns_type                 = grid
+nstlist                 = 10
+rcoulomb                = 1.0
+rvdw                    = 1.0
+
+; Electrostatics
+coulombtype              = PME
+pme_order                = 4
+fourierspacing           = 0.16
+
+; Temperature coupling
+tcoupl                  = V-rescale
+tc-grps                 = Protein Non-Protein
+tau_t                   = 0.1     0.1
+ref_t                   = 300     300
+
+; Pressure coupling
+pcoupl                  = Berendsen
+pcoupltype              = isotropic
+tau_p                   = 2.0
+ref_p                   = 1.0
+compressibility         = 4.5e-5
+
+; Periodic boundary conditions
+pbc                     = xyz
+DispCorr                = EnerPres
+
+; Velocity generation (continuing from NVT, so velocities already exist)
+gen_vel                 = no

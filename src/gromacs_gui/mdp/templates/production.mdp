@@ -1,0 +1,59 @@
+; production.mdp - production MD run
+; Starting point adapted from the widely-used GROMACS community tutorials by
+; Justin Lemkul (http://www.mdtutorials.com/gmx/) - review and adjust these
+; values for your own system before relying on them.
+
+title                   = Production MD
+
+; Run control
+integrator              = md
+nsteps                  = 500000     ; 2 fs * 500000 = 1 ns; raise for longer runs
+dt                      = 0.002
+
+; Output control
+nstxout                 = 0          ; suppress bulky .trr output
+nstvout                 = 0
+nstfout                 = 0
+nstenergy               = 5000
+nstlog                  = 5000
+nstxout-compressed      = 5000       ; write compressed .xtc trajectory instead
+compressed-x-grps       = System
+
+; Bond constraints
+continuation            = yes        ; continuing from NPT equilibration
+constraint_algorithm    = lincs
+constraints             = h-bonds
+lincs_iter              = 1
+lincs_order             = 4
+
+; Neighbor searching
+cutoff-scheme           = Verlet
+ns_type                 = grid
+nstlist                 = 10
+rcoulomb                = 1.0
+rvdw                    = 1.0
+
+; Electrostatics
+coulombtype              = PME
+pme_order                = 4
+fourierspacing           = 0.16
+
+; Temperature coupling
+tcoupl                  = V-rescale
+tc-grps                 = Protein Non-Protein
+tau_t                   = 0.1     0.1
+ref_t                   = 300     300
+
+; Pressure coupling
+pcoupl                  = Parrinello-Rahman
+pcoupltype              = isotropic
+tau_p                   = 2.0
+ref_p                   = 1.0
+compressibility         = 4.5e-5
+
+; Periodic boundary conditions
+pbc                     = xyz
+DispCorr                = EnerPres
+
+; Velocity generation (continuing from NPT, so velocities already exist)
+gen_vel                 = no

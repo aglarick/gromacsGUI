@@ -1,0 +1,18 @@
+; em.mdp - energy minimization
+; Starting point adapted from the widely-used GROMACS community tutorials by
+; Justin Lemkul (http://www.mdtutorials.com/gmx/) - review and adjust these
+; values for your own system before relying on them.
+
+integrator      = steep     ; steepest descent minimization
+emtol           = 1000.0    ; stop when max force < this (kJ/mol/nm)
+emstep          = 0.01      ; initial step size (nm)
+nsteps          = 50000     ; max number of minimization steps
+
+; Neighbor searching
+cutoff-scheme   = Verlet
+nstlist         = 1
+ns_type         = grid
+coulombtype     = PME
+rcoulomb        = 1.0
+rvdw            = 1.0
+pbc             = xyz
