@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use GromacsGUI in your research, please cite it as below."
+title: "GromacsGUI"
+type: software
+authors:
+  - family-names: Baldera
+    given-names: Francisco
+license: MIT
+# repository-code: fill in once the project has a public git remote
