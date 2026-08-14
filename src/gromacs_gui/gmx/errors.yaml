@@ -1,0 +1,50 @@
+# Catalog of known GROMACS error/warning message patterns, mapped to plain-language
+# explanations for the GUI. Extend this file (no code changes needed) as real errors
+# are encountered during development and use.
+#
+# Each entry:
+#   pattern:     regex searched (case-insensitive) against the process's stdout/stderr
+#   title:       short label shown in the GUI
+#   explanation: what the message actually means, in plain language
+#   suggestion:  optional, what the user can try to do about it
+
+- pattern: "Too many warnings"
+  title: "grompp stopped because of too many warnings"
+  explanation: >
+    grompp found configuration issues (unusual atom counts, temperature coupling
+    settings, etc.) and refuses to proceed until you either fix them or explicitly
+    acknowledge them.
+  suggestion: >
+    Read the warnings above this message first. If you understand them and they're
+    expected for your system, you can raise the allowed warning count with -maxwarn N,
+    but don't do this by default — it's easy to hide a real problem this way.
+
+- pattern: "not found in residue topology database"
+  title: "Unknown residue for the chosen force field"
+  explanation: >
+    pdb2gmx doesn't have parameters for one of the residues in your structure file
+    under the force field you selected — this is common for ligands, modified
+    residues, or non-standard amino acids.
+  suggestion: >
+    Either pick a force field that includes this residue, or generate/obtain topology
+    parameters for it separately (e.g. from CHARMM-GUI or a ligand parameterization
+    tool) and add them to your topology.
+
+- pattern: "No such moleculetype|Invalid order for directive"
+  title: "Topology file has a structural problem"
+  explanation: >
+    The .top file references a molecule type that isn't defined, or its sections are
+    out of order. This usually happens after hand-editing topol.top or when an .itp
+    file wasn't included correctly.
+  suggestion: >
+    Check that every #include in topol.top points to a real file, and that
+    [ moleculetype ] blocks appear in the order GROMACS expects.
+
+- pattern: "command not found|No such file or directory.*gmx"
+  title: "gmx binary not found"
+  explanation: >
+    The GUI could not find/run the gmx executable — GMXRC likely hasn't been sourced,
+    so PATH/GMXLIB aren't set the way GROMACS needs.
+  suggestion: >
+    Open Settings and point GromacsGUI at your GMXRC file (e.g.
+    <gromacs-install>/bin/GMXRC).
