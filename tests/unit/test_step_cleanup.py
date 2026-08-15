@@ -10,7 +10,7 @@ PDB_WITH_HETATM = (
 )
 
 
-def test_pdb_input_defaults_hetatm_checked_and_atom_unchecked(qtbot, tmp_path):
+def test_pdb_input_defaults_atom_kept_and_hetatm_not_kept(qtbot, tmp_path):
     project = Project.create(tmp_path / "proj")
     widget = CleanupToolWidget(project, {})
     qtbot.addWidget(widget)
@@ -20,12 +20,12 @@ def test_pdb_input_defaults_hetatm_checked_and_atom_unchecked(qtbot, tmp_path):
     widget._set_input_path(pdb)
 
     assert set(widget._residue_checkboxes) == {"ALA", "HOH", "LIG"}
-    assert widget._residue_checkboxes["ALA"].isChecked() is False
-    assert widget._residue_checkboxes["HOH"].isChecked() is True
-    assert widget._residue_checkboxes["LIG"].isChecked() is True
+    assert widget._residue_checkboxes["ALA"].isChecked() is True
+    assert widget._residue_checkboxes["HOH"].isChecked() is False
+    assert widget._residue_checkboxes["LIG"].isChecked() is False
 
 
-def test_gro_input_defaults_nothing_checked(qtbot, tmp_path):
+def test_gro_input_defaults_everything_kept(qtbot, tmp_path):
     project = Project.create(tmp_path / "proj")
     widget = CleanupToolWidget(project, {})
     qtbot.addWidget(widget)
@@ -41,10 +41,25 @@ def test_gro_input_defaults_nothing_checked(qtbot, tmp_path):
     widget._set_input_path(gro)
 
     assert set(widget._residue_checkboxes) == {"ALA", "HOH"}
+    assert all(cb.isChecked() for cb in widget._residue_checkboxes.values())
+
+
+def test_select_all_and_select_none_buttons(qtbot, tmp_path):
+    project = Project.create(tmp_path / "proj")
+    widget = CleanupToolWidget(project, {})
+    qtbot.addWidget(widget)
+    pdb = tmp_path / "in.pdb"
+    pdb.write_text(PDB_WITH_HETATM)
+    widget._set_input_path(pdb)
+
+    widget._set_all_checked(False)
     assert all(not cb.isChecked() for cb in widget._residue_checkboxes.values())
 
+    widget._set_all_checked(True)
+    assert all(cb.isChecked() for cb in widget._residue_checkboxes.values())
 
-def test_save_writes_cleaned_copy_into_project_cleanup_folder(qtbot, tmp_path):
+
+def test_save_keeps_only_checked_residues(qtbot, tmp_path):
     project = Project.create(tmp_path / "proj")
     widget = CleanupToolWidget(project, {})
     qtbot.addWidget(widget)
@@ -52,9 +67,8 @@ def test_save_writes_cleaned_copy_into_project_cleanup_folder(qtbot, tmp_path):
     pdb.write_text(PDB_WITH_HETATM)
     widget._set_input_path(pdb)
 
-    # Both HETATM residues (HOH, LIG) are checked by default; explicitly keep
-    # LIG to confirm unchecking a default preserves it in the output.
-    widget._residue_checkboxes["LIG"].setChecked(False)
+    # ALA is kept by default; explicitly check LIG too, leave HOH unchecked.
+    widget._residue_checkboxes["LIG"].setChecked(True)
     widget._on_save_clicked()
 
     output = project.root / "cleanup" / "system_cleaned.pdb"
@@ -66,7 +80,28 @@ def test_save_writes_cleaned_copy_into_project_cleanup_folder(qtbot, tmp_path):
     assert "Guardado en" in widget._status_label.text()
 
 
-def test_save_with_nothing_selected_just_copies_the_file(qtbot, tmp_path):
+def test_save_can_extract_a_single_molecule(qtbot, tmp_path):
+    """The advertised use case: deselect everything, keep only the one
+    molecule of interest, save — used later to feed the Structure step.
+    """
+    project = Project.create(tmp_path / "proj")
+    widget = CleanupToolWidget(project, {})
+    qtbot.addWidget(widget)
+    pdb = tmp_path / "system.pdb"
+    pdb.write_text(PDB_WITH_HETATM)
+    widget._set_input_path(pdb)
+
+    widget._set_all_checked(False)
+    widget._residue_checkboxes["LIG"].setChecked(True)
+    widget._on_save_clicked()
+
+    text = (project.root / "cleanup" / "system_cleaned.pdb").read_text()
+    assert "LIG" in text
+    assert "ALA" not in text
+    assert "HOH" not in text
+
+
+def test_save_with_default_selection_just_copies_the_file(qtbot, tmp_path):
     project = Project.create(tmp_path / "proj")
     widget = CleanupToolWidget(project, {})
     qtbot.addWidget(widget)

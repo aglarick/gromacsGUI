@@ -19,11 +19,11 @@ from gromacs_gui.gmx.structure_files import list_residues, remove_residues
 
 _DESCRIPTION = (
     "Herramienta de limpieza: carga cualquier archivo de estructura o caja "
-    "(.pdb o .gro), revisa qué moléculas contiene, y guarda una copia "
-    "filtrada en la carpeta del proyecto. No genera topología ni avanza el "
-    "flujo — no es obligatorio usarla, y no tienes que seguir al paso "
-    "'Structure' después. Es útil para quedarte solo con las moléculas que "
-    "quieres cuando partes de una caja con varias combinadas."
+    "(.pdb o .gro), revisa qué moléculas contiene, y marca las que quieres "
+    "CONSERVAR — el resto se descarta. Útil para extraer una sola molécula "
+    "de una caja con varias combinadas (p. ej. para usarla después en el "
+    "paso 'Structure'). No genera topología ni avanza el flujo, y no es "
+    "obligatorio usarla."
 )
 
 
@@ -52,9 +52,18 @@ class CleanupToolWidget(QWidget):
         picker_row.addWidget(self._input_label, 1)
         picker_row.addWidget(browse_button)
 
+        select_all_button = QPushButton("Seleccionar todo")
+        select_all_button.clicked.connect(lambda: self._set_all_checked(True))
+        select_none_button = QPushButton("Deseleccionar todo")
+        select_none_button.clicked.connect(lambda: self._set_all_checked(False))
+        select_row = QHBoxLayout()
+        select_row.addWidget(select_all_button)
+        select_row.addWidget(select_none_button)
+        select_row.addStretch(1)
+
         self._residue_list_layout = QVBoxLayout()
 
-        self._save_button = QPushButton("Guardar copia limpia")
+        self._save_button = QPushButton("Guardar selección")
         self._save_button.setEnabled(False)
         self._save_button.clicked.connect(self._on_save_clicked)
 
@@ -64,6 +73,7 @@ class CleanupToolWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(description)
         layout.addLayout(picker_row)
+        layout.addLayout(select_row)
         layout.addLayout(self._residue_list_layout)
         layout.addWidget(self._save_button)
         layout.addWidget(self._status_label)
@@ -99,30 +109,39 @@ class CleanupToolWidget(QWidget):
             return
 
         residues = list_residues(self._input_path)
-        default_removed = self._default_removal_candidates(self._input_path)
+        default_kept = self._default_kept_candidates(self._input_path, residues)
         for name, count in sorted(residues.items()):
             checkbox = QCheckBox(f"{name} ×{count}")
-            checkbox.setChecked(name in default_removed)
+            checkbox.setChecked(name in default_kept)
             self._residue_list_layout.addWidget(checkbox)
             self._residue_checkboxes[name] = checkbox
 
         self._save_button.setEnabled(bool(residues))
 
     @staticmethod
-    def _default_removal_candidates(path: Path) -> set[str]:
-        """Pre-check likely-unwanted residues when we can tell (HETATM in a
-        .pdb); .gro has no such marker, so nothing is pre-checked there and
-        the user picks explicitly.
+    def _default_kept_candidates(path: Path, residues: dict[str, int]) -> set[str]:
+        """Pre-check residues to keep: for .pdb, everything except HETATM
+        (crystallographic water, ions, buffer components) - the same net
+        effect as the old "remove HETATM by default" behavior, just phrased
+        as "keep". .gro has no ATOM/HETATM marker to tell apart, so instead
+        of guessing, everything defaults kept (a safe no-op save) - use
+        "Deseleccionar todo" to start from an empty selection when extracting
+        a single molecule out of a combined box.
         """
         if path.suffix.lower() == ".pdb":
-            return set(list_heteroatom_residues(path))
-        return set()
+            return set(residues) - set(list_heteroatom_residues(path))
+        return set(residues)
+
+    def _set_all_checked(self, checked: bool) -> None:
+        for checkbox in self._residue_checkboxes.values():
+            checkbox.setChecked(checked)
 
     def _on_save_clicked(self) -> None:
         assert self._input_path is not None
-        residues_to_remove = {
+        residues_to_keep = {
             name for name, checkbox in self._residue_checkboxes.items() if checkbox.isChecked()
         }
+        residues_to_remove = set(self._residue_checkboxes) - residues_to_keep
 
         cleanup_dir = self.project.root / "cleanup"
         cleanup_dir.mkdir(exist_ok=True)
