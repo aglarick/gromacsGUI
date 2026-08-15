@@ -12,8 +12,8 @@ from gromacs_gui.gmx.commands.genion import build_genion_command, genion_stdin
 from gromacs_gui.gmx.commands.grompp import build_grompp_command
 from gromacs_gui.gmx.commands.pdb2gmx import (
     build_pdb2gmx_command,
-    find_unsupported_heteroatoms,
-    strip_crystal_waters,
+    list_heteroatom_residues,
+    remove_residues,
 )
 from gromacs_gui.gmx.commands.solvate import build_solvate_command
 from gromacs_gui.gmx.forcefields import gmxdata_top_dir, list_force_fields, list_water_models
@@ -56,7 +56,7 @@ def test_structure_through_ions_pipeline_on_real_gmx(qtbot, tmp_path, gmx_enviro
     assert "tip3p" in {w.name for w in list_water_models(top_dir, "amber99sb-ildn")}
 
     # 1AKI has only crystallographic water HETATM records, no ligands.
-    assert find_unsupported_heteroatoms(FIXTURE_PDB) == set()
+    assert list_heteroatom_residues(FIXTURE_PDB) == {"HOH": 78}
 
     project = Project.create(tmp_path / "myproj")
     topology_dir = project.root / "topology"
@@ -65,7 +65,7 @@ def test_structure_through_ions_pipeline_on_real_gmx(qtbot, tmp_path, gmx_enviro
     assert is_step_ready(project, "structure")
     structure_dir = project.step_dir("structure")
     clean_pdb = structure_dir / "clean.pdb"
-    strip_crystal_waters(FIXTURE_PDB, clean_pdb)
+    remove_residues(FIXTURE_PDB, clean_pdb, {"HOH"})
 
     processed_gro = structure_dir / "processed.gro"
     topol_top = topology_dir / "topol.top"

@@ -35,7 +35,7 @@ def test_full_wizard_ui_pipeline_structure_through_ions(qtbot, tmp_path, gmx_env
 
     structure_widget = StepStructureWidget(project, env)
     qtbot.addWidget(structure_widget)
-    structure_widget._input_path = FIXTURE_PDB
+    structure_widget._set_structure_path(FIXTURE_PDB)
     assert structure_widget.force_field_combo.count() > 0, "no force fields discovered"
     ff_index = structure_widget.force_field_combo.findData("amber99sb-ildn")
     assert ff_index >= 0

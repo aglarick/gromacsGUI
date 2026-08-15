@@ -5,8 +5,8 @@ from gromacs_gui.gmx.commands.genion import build_genion_command, genion_stdin
 from gromacs_gui.gmx.commands.grompp import build_grompp_command
 from gromacs_gui.gmx.commands.pdb2gmx import (
     build_pdb2gmx_command,
-    find_unsupported_heteroatoms,
-    strip_crystal_waters,
+    list_heteroatom_residues,
+    remove_residues,
 )
 from gromacs_gui.gmx.commands.solvate import build_solvate_command
 
@@ -79,35 +79,39 @@ def test_genion_stdin_answers_with_solvent_group_name():
     assert genion_stdin("Water") == "Water\n"
 
 
-def test_find_unsupported_heteroatoms_ignores_water(tmp_path):
-    pdb = tmp_path / "test.pdb"
-    pdb.write_text("HETATM    1  O   HOH A 200      0.000   0.000   0.000\n")
-
-    assert find_unsupported_heteroatoms(pdb) == set()
-
-
-def test_find_unsupported_heteroatoms_flags_ligand(tmp_path):
+def test_list_heteroatom_residues_counts_by_residue_name(tmp_path):
     pdb = tmp_path / "test.pdb"
     pdb.write_text(
-        "HETATM    1  O   HOH A 200      0.000   0.000   0.000\n"
-        "HETATM    2  C1  LIG A 201      1.000   1.000   1.000\n"
+        "ATOM      1  CA  ALA A   1      0.000   0.000   0.000\n"
+        "HETATM    2  O   HOH A 200      1.000   1.000   1.000\n"
+        "HETATM    3  O   HOH A 201      1.000   1.000   1.000\n"
+        "HETATM    4  C1  LIG A 202      2.000   2.000   2.000\n"
     )
 
-    assert find_unsupported_heteroatoms(pdb) == {"LIG"}
+    assert list_heteroatom_residues(pdb) == {"HOH": 2, "LIG": 1}
 
 
-def test_strip_crystal_waters_removes_only_water(tmp_path):
+def test_list_heteroatom_residues_empty_when_no_hetatm(tmp_path):
+    pdb = tmp_path / "test.pdb"
+    pdb.write_text("ATOM      1  CA  ALA A   1      0.000   0.000   0.000\n")
+
+    assert list_heteroatom_residues(pdb) == {}
+
+
+def test_remove_residues_removes_only_the_selected_names(tmp_path):
     input_pdb = tmp_path / "in.pdb"
     input_pdb.write_text(
         "ATOM      1  CA  ALA A   1      0.000   0.000   0.000\n"
         "HETATM    2  O   HOH A 200      1.000   1.000   1.000\n"
         "HETATM    3  C1  LIG A 201      2.000   2.000   2.000\n"
+        "HETATM    4  S   SO4 A 202      3.000   3.000   3.000\n"
     )
     output_pdb = tmp_path / "out.pdb"
 
-    strip_crystal_waters(input_pdb, output_pdb)
+    remove_residues(input_pdb, output_pdb, {"HOH", "SO4"})
 
     text = output_pdb.read_text()
     assert "ALA" in text
     assert "LIG" in text
     assert "HOH" not in text
+    assert "SO4" not in text

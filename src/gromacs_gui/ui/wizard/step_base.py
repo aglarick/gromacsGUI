@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtWidgets import QFormLayout, QMessageBox, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFormLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget
 
 from gromacs_gui.core.project import Project
 from gromacs_gui.gmx.runner import GmxProcessRunner
@@ -17,13 +17,17 @@ class StepCommand:
 
 
 class StepBase(QWidget):
-    """Common shell for one wizard step: a step-specific form (subclasses add
-    widgets to `self.form_layout`), a Run button, and a shared log console
-    wired to run a *sequence* of gmx commands (some steps need more than one,
-    e.g. ions needs grompp then genion), recording progress on the Project.
+    """Common shell for one wizard step: a description of what the step does,
+    a step-specific form (subclasses add widgets to `self.form_layout`), a Run
+    button, and a shared log console wired to run a *sequence* of gmx commands
+    (some steps need more than one, e.g. ions needs grompp then genion),
+    recording progress on the Project. A step with no gmx command to run at
+    all (e.g. registering files the user already prepared elsewhere) can
+    return an empty list from build_commands() to finish immediately.
     """
 
     step_name: str = ""  # must match an entry in core.step_state.STEP_ORDER
+    DESCRIPTION: str = ""  # plain-language explanation shown above the form
 
     def __init__(
         self, project: Project, gmx_env: dict[str, str], parent: QWidget | None = None
@@ -38,6 +42,11 @@ class StepBase(QWidget):
         self.log_console = LogConsole(self)
 
         layout = QVBoxLayout(self)
+        if self.DESCRIPTION:
+            description_label = QLabel(self.DESCRIPTION, self)
+            description_label.setWordWrap(True)
+            description_label.setStyleSheet("color: #555;")
+            layout.addWidget(description_label)
         layout.addLayout(self.form_layout)
         layout.addWidget(self.run_button)
         layout.addWidget(self.log_console, 1)
@@ -50,6 +59,10 @@ class StepBase(QWidget):
         raise NotImplementedError
 
     def build_commands(self) -> list[StepCommand]:
+        """Return the gmx command(s) to run, in order. May also perform
+        non-gmx side effects (e.g. copying user-supplied files into the
+        project) and return an empty list if there's nothing left to run.
+        """
         raise NotImplementedError
 
     def output_files(self) -> list[str]:
@@ -65,13 +78,20 @@ class StepBase(QWidget):
             )
             return
 
-        self._pending_commands = list(self.build_commands())
-        if not self._pending_commands:
-            return
-
         self.log_console.clear_log()
         self.run_button.setEnabled(False)
         self.project.record_step_started(self.step_name)
+
+        try:
+            self._pending_commands = list(self.build_commands())
+        except Exception as exc:  # surfaced in the log/manifest, not a crash
+            self._fail(str(exc))
+            return
+
+        if not self._pending_commands:
+            self._finish_successfully()
+            return
+
         self._run_next_command()
 
     def _run_next_command(self) -> None:
@@ -101,12 +121,15 @@ class StepBase(QWidget):
             self._run_next_command()
             return
 
-        self.run_button.setEnabled(True)
-        self.project.record_step_finished(self.step_name, output_files=self.output_files())
-        self.log_console.append_line("[step completed successfully]", "info")
+        self._finish_successfully()
 
     def _on_error(self, message: str) -> None:
         self._fail(message)
+
+    def _finish_successfully(self) -> None:
+        self.run_button.setEnabled(True)
+        self.project.record_step_finished(self.step_name, output_files=self.output_files())
+        self.log_console.append_line("[step completed successfully]", "info")
 
     def _fail(self, message: str) -> None:
         self.run_button.setEnabled(True)

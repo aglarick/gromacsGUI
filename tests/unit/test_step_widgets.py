@@ -34,12 +34,80 @@ def test_step_structure_valid_once_file_and_ff_selected(qtbot, tmp_path):
     qtbot.addWidget(widget)
     pdb = tmp_path / "in.pdb"
     pdb.write_text("ATOM      1  CA  ALA A   1      0.000   0.000   0.000\n")
-    widget._input_path = pdb
+    widget._set_structure_path(pdb)
 
     assert widget.is_valid() is True
     commands = widget.build_commands()
     assert len(commands) == 1
     assert commands[0].args[0] == "pdb2gmx"
+
+
+def test_step_structure_hetatm_checklist_defaults_to_all_checked(qtbot, tmp_path):
+    project = Project.create(tmp_path / "proj")
+    widget = StepStructureWidget(project, _fake_gmx_env(tmp_path))
+    qtbot.addWidget(widget)
+    pdb = tmp_path / "in.pdb"
+    pdb.write_text(
+        "ATOM      1  CA  ALA A   1      0.000   0.000   0.000\n"
+        "HETATM    2  O   HOH A 200      1.000   1.000   1.000\n"
+        "HETATM    3  C1  LIG A 201      2.000   2.000   2.000\n"
+    )
+
+    widget._set_structure_path(pdb)
+
+    assert not widget._cleanup_group.isHidden()
+    assert set(widget._residue_checkboxes) == {"HOH", "LIG"}
+    assert all(cb.isChecked() for cb in widget._residue_checkboxes.values())
+
+    # unchecking LIG means it's kept in the cleaned file build_commands() writes
+    widget._residue_checkboxes["LIG"].setChecked(False)
+    widget.force_field_combo.setCurrentIndex(0)
+    widget.build_commands()
+
+    cleaned_text = (project.step_dir("structure") / "cleaned.pdb").read_text()
+    assert "LIG" in cleaned_text
+    assert "HOH" not in cleaned_text
+
+
+def test_step_structure_gro_input_has_no_cleanup_section(qtbot, tmp_path):
+    project = Project.create(tmp_path / "proj")
+    widget = StepStructureWidget(project, _fake_gmx_env(tmp_path))
+    qtbot.addWidget(widget)
+    gro = tmp_path / "in.gro"
+    gro.write_text("fake gro\n")
+
+    widget._set_structure_path(gro)
+
+    assert widget._cleanup_group.isHidden()
+    assert widget._residue_checkboxes == {}
+
+
+def test_step_structure_bring_own_topology_stages_files_without_gmx(qtbot, tmp_path):
+    project = Project.create(tmp_path / "proj")
+    widget = StepStructureWidget(project, _fake_gmx_env(tmp_path))
+    qtbot.addWidget(widget)
+
+    coords = tmp_path / "ligand.gro"
+    coords.write_text("fake gro\n")
+    topology = tmp_path / "ligand.top"
+    topology.write_text("fake top\n")
+
+    widget._bring_own_radio.setChecked(True)
+    assert widget.is_valid() is False  # no files picked yet
+
+    widget._own_coords_path = coords
+    widget._own_topology_path = topology
+
+    assert widget.is_valid() is True
+    commands = widget.build_commands()
+
+    assert commands == []
+    assert (project.step_dir("structure") / "processed.gro").read_text() == "fake gro\n"
+    assert (project.root / "topology" / "topol.top").read_text() == "fake top\n"
+    assert widget.output_files() == [
+        "00_structure/processed.gro",
+        "topology/topol.top",
+    ]
 
 
 def test_step_box_invalid_before_structure_step_ran(qtbot, tmp_path):

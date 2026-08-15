@@ -15,6 +15,11 @@ from gromacs_gui.ui.wizard.step_base import StepBase, StepCommand
 class StepIonsWidget(StepBase):
     step_name = "ions"
 
+    DESCRIPTION = (
+        "Reemplaza algunas moléculas de solvente con iones, para neutralizar "
+        "la carga eléctrica total del sistema."
+    )
+
     def __init__(
         self, project: Project, gmx_env: dict[str, str], parent: QWidget | None = None
     ) -> None:

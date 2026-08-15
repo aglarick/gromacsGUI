@@ -15,6 +15,13 @@ _BOX_TYPES = ["cubic", "dodecahedron", "octahedron", "triclinic"]
 class StepBoxWidget(StepBase):
     step_name = "box"
 
+    DESCRIPTION = (
+        "Define la caja de simulación alrededor de tu molécula: su forma, y "
+        "qué tan lejos deben quedar los átomos del borde (para que la "
+        "molécula no interactúe consigo misma a través de las condiciones "
+        "periódicas de frontera)."
+    )
+
     def __init__(
         self, project: Project, gmx_env: dict[str, str], parent: QWidget | None = None
     ) -> None:
