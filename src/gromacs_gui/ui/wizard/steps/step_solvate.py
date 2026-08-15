@@ -6,7 +6,10 @@ from PySide6.QtWidgets import QLineEdit, QWidget
 
 from gromacs_gui.core import conventions
 from gromacs_gui.core.project import Project
-from gromacs_gui.gmx.commands.solvate import DEFAULT_SOLVENT_BOX, build_solvate_command
+from gromacs_gui.gmx.commands.solvate import (
+    build_solvate_command,
+    default_solvent_box_for_water_model,
+)
 from gromacs_gui.ui.wizard.step_base import StepBase, StepCommand
 
 
@@ -22,8 +25,11 @@ class StepSolvateWidget(StepBase):
 
         # A categorized solvent library with pre-equilibrated boxes is a planned
         # future milestone (see project notes); for now this accepts any box gmx
-        # can resolve, defaulting to the built-in water box.
-        self.solvent_box_edit = QLineEdit(DEFAULT_SOLVENT_BOX)
+        # can resolve, defaulting to whichever box matches the water model chosen
+        # in the Structure step (spc216.gro's 3-site geometry doesn't fit 4/5-site
+        # models like tip4p/tip5p, which need their own box).
+        default_box = default_solvent_box_for_water_model(project.manifest.water_model)
+        self.solvent_box_edit = QLineEdit(default_box)
         self.form_layout.addRow("Solvent box (-cs):", self.solvent_box_edit)
 
     def _input_gro(self) -> Path:

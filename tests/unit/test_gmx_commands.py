@@ -8,7 +8,10 @@ from gromacs_gui.gmx.commands.pdb2gmx import (
     list_heteroatom_residues,
     remove_residues,
 )
-from gromacs_gui.gmx.commands.solvate import build_solvate_command
+from gromacs_gui.gmx.commands.solvate import (
+    build_solvate_command,
+    default_solvent_box_for_water_model,
+)
 
 
 def test_build_pdb2gmx_command_includes_ff_and_water_to_avoid_prompts():
@@ -46,6 +49,18 @@ def test_build_solvate_command_uses_default_box():
     args = build_solvate_command("in.gro", "topol.top", "out.gro")
 
     assert args[args.index("-cs") + 1] == "spc216.gro"
+
+
+def test_default_solvent_box_falls_back_to_spc216_for_3site_models():
+    assert default_solvent_box_for_water_model(None) == "spc216.gro"
+    assert default_solvent_box_for_water_model("tip3p") == "spc216.gro"
+    assert default_solvent_box_for_water_model("spce") == "spc216.gro"
+
+
+def test_default_solvent_box_uses_matching_box_for_4_and_5_site_models():
+    assert default_solvent_box_for_water_model("tip4p") == "tip4p.gro"
+    assert default_solvent_box_for_water_model("tip4pew") == "tip4p.gro"
+    assert default_solvent_box_for_water_model("tip5p") == "tip5p.gro"
 
 
 def test_build_grompp_command_omits_maxwarn_by_default():

@@ -110,6 +110,46 @@ def test_step_structure_bring_own_topology_stages_files_without_gmx(qtbot, tmp_p
     ]
 
 
+def test_step_structure_bring_own_itp_gets_wrapped_into_a_top(qtbot, tmp_path):
+    project = Project.create(tmp_path / "proj")
+    widget = StepStructureWidget(project, _fake_gmx_env(tmp_path))
+    qtbot.addWidget(widget)
+
+    coords = tmp_path / "ligand.gro"
+    coords.write_text("fake gro\n")
+    itp = tmp_path / "ligand.itp"
+    itp.write_text("[ moleculetype ]\nLIG   3\n")
+
+    widget._bring_own_radio.setChecked(True)
+    widget._own_coords_path = coords
+    widget._own_topology_path = itp
+
+    # The force field combo defaults to its first entry, so this is already
+    # valid; explicitly confirming the selection made below is used.
+    assert widget.is_valid() is True
+    widget._own_topology_ff_combo.setCurrentIndex(0)
+
+    commands = widget.build_commands()
+
+    assert commands == []
+    top_text = (project.root / "topology" / "topol.top").read_text()
+    assert '#include "myff.ff/forcefield.itp"' in top_text
+    assert '#include "ligand.itp"' in top_text
+    assert "LIG" in top_text
+    assert (project.root / "topology" / "ligand.itp").is_file()
+
+
+def test_step_structure_server_mode_disables_run_and_is_invalid(qtbot, tmp_path):
+    project = Project.create(tmp_path / "proj")
+    widget = StepStructureWidget(project, _fake_gmx_env(tmp_path))
+    qtbot.addWidget(widget)
+
+    widget._server_radio.setChecked(True)
+
+    assert widget.is_valid() is False
+    assert widget.run_button.isEnabled() is False
+
+
 def test_step_box_invalid_before_structure_step_ran(qtbot, tmp_path):
     project = Project.create(tmp_path / "proj")
     widget = StepBoxWidget(project, {})
@@ -138,6 +178,17 @@ def test_step_solvate_build_commands_uses_default_box(qtbot, tmp_path):
     assert widget.is_valid() is True
     commands = widget.build_commands()
     assert commands[0].args[0] == "solvate"
+
+
+def test_step_solvate_defaults_box_from_project_water_model(qtbot, tmp_path):
+    project = Project.create(tmp_path / "proj")
+    project.manifest.water_model = "tip4p"
+    (project.step_dir("box") / "boxed.gro").write_text("fake")
+
+    widget = StepSolvateWidget(project, {})
+    qtbot.addWidget(widget)
+
+    assert widget.solvent_box_edit.text() == "tip4p.gro"
 
 
 def test_step_ions_builds_grompp_then_genion_with_stdin(qtbot, tmp_path):
