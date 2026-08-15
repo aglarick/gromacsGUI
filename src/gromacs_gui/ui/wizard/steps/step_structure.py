@@ -47,6 +47,12 @@ _SERVER_INFO_TEXT = (
     ".gro o .pdb ya limpio. Todavía no está disponible."
 )
 
+# Herramientas como LigParGen o ATB suelen generar su propia carpeta de campo
+# de fuerza (p. ej. oplsaam.ff), distinta de los campos de fuerza que trae
+# GROMACS de fábrica — seleccionar uno de los de fábrica no necesariamente
+# es compatible con esos parámetros.
+_CUSTOM_FF_SENTINEL = "__custom_ff__"
+
 
 class StepStructureWidget(StepBase):
     step_name = "structure"
@@ -78,6 +84,13 @@ class StepStructureWidget(StepBase):
         self.force_field_combo.currentIndexChanged.connect(self._populate_water_models)
         self._populate_water_models()
         self._populate_force_field_combo(self._own_topology_ff_combo)
+        self._own_topology_ff_combo.addItem(
+            "Otra carpeta de campo de fuerza (.ff)…", userData=_CUSTOM_FF_SENTINEL
+        )
+        self._own_topology_ff_combo.currentIndexChanged.connect(
+            self._update_custom_ff_row_visibility
+        )
+        self._update_custom_ff_row_visibility()
 
         for radio in (self._generate_radio, self._bring_own_radio, self._server_radio):
             radio.toggled.connect(self._update_mode_visibility)
@@ -162,10 +175,26 @@ class StepStructureWidget(StepBase):
 
         self._own_topology_ff_combo = QComboBox()
         bring_own_form.addRow("Force field (solo si es .itp):", self._own_topology_ff_combo)
+
+        self._own_custom_ff_path: Path | None = None
+        self._own_custom_ff_label = QLabel("No folder selected")
+        own_custom_ff_button = QPushButton("Browse…")
+        own_custom_ff_button.clicked.connect(self._on_browse_custom_ff_clicked)
+        own_custom_ff_row = QHBoxLayout()
+        own_custom_ff_row.addWidget(self._own_custom_ff_label, 1)
+        own_custom_ff_row.addWidget(own_custom_ff_button)
+        self._own_custom_ff_container = QWidget()
+        self._own_custom_ff_container.setLayout(own_custom_ff_row)
+        bring_own_form.addRow("Carpeta .ff personalizada:", self._own_custom_ff_container)
+
         itp_help_label = QLabel(
             "Si eliges un .itp, construimos el .top que lo envuelve incluyendo "
-            "el campo de fuerza que elijas aquí. Si ya tienes un .top completo, "
-            "este campo no se usa."
+            "el campo de fuerza que elijas aquí. Si tu generador (LigParGen, "
+            "ATB, u otro) trae su propia carpeta de campo de fuerza en vez de "
+            "usar una de las que trae GROMACS, elige 'Otra carpeta de campo de "
+            "fuerza (.ff)…' y selecciónala — no asumas que un campo de fuerza "
+            "de la lista es compatible con parámetros generados externamente. "
+            "Si ya tienes un .top completo, nada de esto se usa."
         )
         itp_help_label.setWordWrap(True)
         bring_own_form.addRow(itp_help_label)
@@ -272,6 +301,19 @@ class StepStructureWidget(StepBase):
         self._own_topology_path = Path(path)
         self._own_topology_label.setText(self._own_topology_path.name)
 
+    def _update_custom_ff_row_visibility(self) -> None:
+        is_custom = self._own_topology_ff_combo.currentData() == _CUSTOM_FF_SENTINEL
+        self._own_custom_ff_container.setVisible(is_custom)
+
+    def _on_browse_custom_ff_clicked(self) -> None:
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select a force field folder (<name>.ff)", str(Path.home())
+        )
+        if not folder:
+            return
+        self._own_custom_ff_path = Path(folder)
+        self._own_custom_ff_label.setText(self._own_custom_ff_path.name)
+
     # --- StepBase overrides ---
     def is_valid(self) -> bool:
         if self._generate_radio.isChecked():
@@ -287,7 +329,7 @@ class StepStructureWidget(StepBase):
                 and self._own_topology_path.is_file()
                 and (
                     self._own_topology_path.suffix.lower() != ".itp"
-                    or self._own_topology_ff_combo.currentData() is not None
+                    or self._itp_force_field_ready()
                 )
             )
             return (
@@ -296,6 +338,17 @@ class StepStructureWidget(StepBase):
                 and topology_ready
             )
         return False  # server mode: not available yet
+
+    def _itp_force_field_ready(self) -> bool:
+        data = self._own_topology_ff_combo.currentData()
+        if data is None:
+            return False
+        if data == _CUSTOM_FF_SENTINEL:
+            return (
+                self._own_custom_ff_path is not None
+                and (self._own_custom_ff_path / "forcefield.itp").is_file()
+            )
+        return True
 
     def build_commands(self) -> list[StepCommand]:
         if self._generate_radio.isChecked():
@@ -343,9 +396,7 @@ class StepStructureWidget(StepBase):
 
         topology_dest = topology_dir / conventions.TOPOLOGY_TOP
         if self._own_topology_path.suffix.lower() == ".itp":
-            force_field = self._own_topology_ff_combo.currentData()
-            if not force_field:
-                raise ValueError("Selecciona un campo de fuerza para incluir junto al .itp.")
+            force_field = self._resolve_itp_force_field(topology_dir)
             itp_dest = topology_dir / self._own_topology_path.name
             shutil.copyfile(self._own_topology_path, itp_dest)
             molecule_name = parse_moleculetype_name(itp_dest)
@@ -354,6 +405,24 @@ class StepStructureWidget(StepBase):
             )
         else:
             shutil.copyfile(self._own_topology_path, topology_dest)
+
+    def _resolve_itp_force_field(self, topology_dir: Path) -> str:
+        """Return the bare force field name to `#include` for the .itp, copying
+        a user-supplied custom .ff folder into the project first if that's
+        what was chosen (rather than assuming a GROMACS-bundled one applies).
+        """
+        data = self._own_topology_ff_combo.currentData()
+        if data != _CUSTOM_FF_SENTINEL:
+            return data
+
+        assert self._own_custom_ff_path is not None
+        dest_name = self._own_custom_ff_path.name
+        if not dest_name.endswith(".ff"):
+            dest_name += ".ff"
+        dest_dir = topology_dir / dest_name
+        if not dest_dir.exists():
+            shutil.copytree(self._own_custom_ff_path, dest_dir)
+        return dest_name.removesuffix(".ff")
 
     def output_files(self) -> list[str]:
         root = self.project.root

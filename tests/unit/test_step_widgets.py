@@ -139,6 +139,44 @@ def test_step_structure_bring_own_itp_gets_wrapped_into_a_top(qtbot, tmp_path):
     assert (project.root / "topology" / "ligand.itp").is_file()
 
 
+def test_step_structure_bring_own_itp_with_custom_ff_folder(qtbot, tmp_path):
+    project = Project.create(tmp_path / "proj")
+    widget = StepStructureWidget(project, _fake_gmx_env(tmp_path))
+    qtbot.addWidget(widget)
+
+    coords = tmp_path / "ligand.gro"
+    coords.write_text("fake gro\n")
+    itp = tmp_path / "ligand.itp"
+    itp.write_text("[ moleculetype ]\nLIG   3\n")
+
+    # A custom force field folder, like the one LigParGen/ATB might produce,
+    # not one of the GROMACS-bundled ones from _fake_gmx_env.
+    custom_ff = tmp_path / "oplsaam.ff"
+    custom_ff.mkdir()
+    (custom_ff / "forcefield.itp").write_text("[ defaults ]\n1 3 yes 0.5 0.5\n")
+    (custom_ff / "ffnonbonded.itp").write_text("; custom params\n")
+
+    widget._bring_own_radio.setChecked(True)
+    widget._own_coords_path = coords
+    widget._own_topology_path = itp
+
+    custom_index = widget._own_topology_ff_combo.findData("__custom_ff__")
+    assert custom_index >= 0
+    widget._own_topology_ff_combo.setCurrentIndex(custom_index)
+    assert widget.is_valid() is False  # no folder picked yet
+
+    widget._own_custom_ff_path = custom_ff
+    assert widget.is_valid() is True
+
+    commands = widget.build_commands()
+
+    assert commands == []
+    top_text = (project.root / "topology" / "topol.top").read_text()
+    assert '#include "oplsaam.ff/forcefield.itp"' in top_text
+    assert (project.root / "topology" / "oplsaam.ff" / "forcefield.itp").is_file()
+    assert (project.root / "topology" / "oplsaam.ff" / "ffnonbonded.itp").is_file()
+
+
 def test_step_structure_server_mode_disables_run_and_is_invalid(qtbot, tmp_path):
     project = Project.create(tmp_path / "proj")
     widget = StepStructureWidget(project, _fake_gmx_env(tmp_path))
