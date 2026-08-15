@@ -10,14 +10,11 @@ from gromacs_gui.core.step_state import StepState
 from gromacs_gui.gmx.commands.editconf import build_editconf_command
 from gromacs_gui.gmx.commands.genion import build_genion_command, genion_stdin
 from gromacs_gui.gmx.commands.grompp import build_grompp_command
-from gromacs_gui.gmx.commands.pdb2gmx import (
-    build_pdb2gmx_command,
-    list_heteroatom_residues,
-    remove_residues,
-)
+from gromacs_gui.gmx.commands.pdb2gmx import build_pdb2gmx_command, list_heteroatom_residues
 from gromacs_gui.gmx.commands.solvate import build_solvate_command
 from gromacs_gui.gmx.forcefields import gmxdata_top_dir, list_force_fields, list_water_models
 from gromacs_gui.gmx.runner import GmxProcessRunner
+from gromacs_gui.gmx.structure_files import remove_residues
 from gromacs_gui.mdp.defaults import default_mdp_path
 from gromacs_gui.utils.settings import find_gmx_binary, with_gmx_defaults
 

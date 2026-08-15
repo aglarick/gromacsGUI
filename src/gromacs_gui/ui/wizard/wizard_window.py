@@ -16,9 +16,12 @@ from gromacs_gui.core.pipeline import is_step_ready
 from gromacs_gui.core.project import Project
 from gromacs_gui.core.step_state import STEP_ORDER
 from gromacs_gui.ui.wizard.steps.step_box import StepBoxWidget
+from gromacs_gui.ui.wizard.steps.step_cleanup import CleanupToolWidget
 from gromacs_gui.ui.wizard.steps.step_ions import StepIonsWidget
 from gromacs_gui.ui.wizard.steps.step_solvate import StepSolvateWidget
 from gromacs_gui.ui.wizard.steps.step_structure import StepStructureWidget
+
+_CLEANUP_ROW_LABEL = "0. Limpieza"
 
 _STEP_LABELS = {
     "structure": "1. Structure",
@@ -103,6 +106,10 @@ class WizardWindow(QWidget):
         self._sidebar.setFixedWidth(200)
         self._stack = QStackedWidget(self)
 
+        self._sidebar.addItem(QListWidgetItem(_CLEANUP_ROW_LABEL))
+        self._stack.addWidget(CleanupToolWidget(project, gmx_env, self))
+        self._step_row_start = 1  # row 0 is the always-enabled cleanup tool above
+
         for step_name in STEP_ORDER:
             self._sidebar.addItem(QListWidgetItem(_STEP_LABELS[step_name]))
             widget_cls = _STEP_WIDGET_CLASSES.get(step_name)
@@ -128,8 +135,8 @@ class WizardWindow(QWidget):
         self._sidebar.setCurrentRow(0)
 
     def refresh(self) -> None:
-        for index, step_name in enumerate(STEP_ORDER):
-            item = self._sidebar.item(index)
+        for offset, step_name in enumerate(STEP_ORDER):
+            item = self._sidebar.item(self._step_row_start + offset)
             self._set_row_enabled(item, is_step_ready(self.project, step_name))
         self._analysis_page.refresh()
 

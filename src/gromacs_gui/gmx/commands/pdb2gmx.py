@@ -22,19 +22,6 @@ def list_heteroatom_residues(pdb_path: Path) -> dict[str, int]:
     return counts
 
 
-def remove_residues(input_pdb: Path, output_pdb: Path, residue_names: set[str]) -> None:
-    """Remove all HETATM records for the given residue names, keeping
-    everything else (including any HETATM residues not in the set) intact.
-    """
-    lines = Path(input_pdb).read_text(errors="replace").splitlines(keepends=True)
-    kept = [
-        line
-        for line in lines
-        if not (line.startswith("HETATM") and line[17:20].strip() in residue_names)
-    ]
-    Path(output_pdb).write_text("".join(kept))
-
-
 def build_pdb2gmx_command(
     input_structure: Path,
     output_gro: Path,

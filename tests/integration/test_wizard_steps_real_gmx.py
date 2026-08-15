@@ -7,6 +7,7 @@ import pytest
 from gromacs_gui.core.project import Project
 from gromacs_gui.core.step_state import StepState
 from gromacs_gui.ui.wizard.steps.step_box import StepBoxWidget
+from gromacs_gui.ui.wizard.steps.step_cleanup import CleanupToolWidget
 from gromacs_gui.ui.wizard.steps.step_ions import StepIonsWidget
 from gromacs_gui.ui.wizard.steps.step_solvate import StepSolvateWidget
 from gromacs_gui.ui.wizard.steps.step_structure import StepStructureWidget
@@ -33,9 +34,19 @@ def test_full_wizard_ui_pipeline_structure_through_ions(qtbot, tmp_path, gmx_env
     env = with_gmx_defaults(gmx_environment)
     project = Project.create(tmp_path / "myproj")
 
+    # Step 1 no longer strips crystal waters itself; the standalone cleanup
+    # tool (Step 0) does that now, ahead of the pipeline.
+    cleanup_widget = CleanupToolWidget(project, env)
+    qtbot.addWidget(cleanup_widget)
+    cleanup_widget._set_input_path(FIXTURE_PDB)
+    assert cleanup_widget._residue_checkboxes["HOH"].isChecked()
+    cleanup_widget._on_save_clicked()
+    cleaned_pdb = project.root / "cleanup" / "1aki_cleaned.pdb"
+    assert cleaned_pdb.is_file()
+
     structure_widget = StepStructureWidget(project, env)
     qtbot.addWidget(structure_widget)
-    structure_widget._set_structure_path(FIXTURE_PDB)
+    structure_widget._set_structure_path(cleaned_pdb)
     assert structure_widget.force_field_combo.count() > 0, "no force fields discovered"
     ff_index = structure_widget.force_field_combo.findData("amber99sb-ildn")
     assert ff_index >= 0

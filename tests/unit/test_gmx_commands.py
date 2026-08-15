@@ -3,11 +3,7 @@ from __future__ import annotations
 from gromacs_gui.gmx.commands.editconf import build_editconf_command
 from gromacs_gui.gmx.commands.genion import build_genion_command, genion_stdin
 from gromacs_gui.gmx.commands.grompp import build_grompp_command
-from gromacs_gui.gmx.commands.pdb2gmx import (
-    build_pdb2gmx_command,
-    list_heteroatom_residues,
-    remove_residues,
-)
+from gromacs_gui.gmx.commands.pdb2gmx import build_pdb2gmx_command, list_heteroatom_residues
 from gromacs_gui.gmx.commands.solvate import (
     build_solvate_command,
     default_solvent_box_for_water_model,
@@ -111,22 +107,3 @@ def test_list_heteroatom_residues_empty_when_no_hetatm(tmp_path):
     pdb.write_text("ATOM      1  CA  ALA A   1      0.000   0.000   0.000\n")
 
     assert list_heteroatom_residues(pdb) == {}
-
-
-def test_remove_residues_removes_only_the_selected_names(tmp_path):
-    input_pdb = tmp_path / "in.pdb"
-    input_pdb.write_text(
-        "ATOM      1  CA  ALA A   1      0.000   0.000   0.000\n"
-        "HETATM    2  O   HOH A 200      1.000   1.000   1.000\n"
-        "HETATM    3  C1  LIG A 201      2.000   2.000   2.000\n"
-        "HETATM    4  S   SO4 A 202      3.000   3.000   3.000\n"
-    )
-    output_pdb = tmp_path / "out.pdb"
-
-    remove_residues(input_pdb, output_pdb, {"HOH", "SO4"})
-
-    text = output_pdb.read_text()
-    assert "ALA" in text
-    assert "LIG" in text
-    assert "HOH" not in text
-    assert "SO4" not in text

@@ -5,11 +5,9 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QButtonGroup,
-    QCheckBox,
     QComboBox,
     QFileDialog,
     QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -20,21 +18,10 @@ from PySide6.QtWidgets import (
 
 from gromacs_gui.core import conventions
 from gromacs_gui.core.project import Project
-from gromacs_gui.gmx.commands.pdb2gmx import (
-    build_pdb2gmx_command,
-    list_heteroatom_residues,
-    remove_residues,
-)
+from gromacs_gui.gmx.commands.pdb2gmx import build_pdb2gmx_command
 from gromacs_gui.gmx.forcefields import gmxdata_top_dir, list_force_fields, list_water_models
 from gromacs_gui.gmx.topology import build_wrapping_topology, parse_moleculetype_name
 from gromacs_gui.ui.wizard.step_base import StepBase, StepCommand
-
-_CLEANUP_HELP_TEXT = (
-    "HETATM son átomos que no forman parte de la cadena principal de la "
-    "proteína (agua, iones u otras moléculas presentes en los datos "
-    "cristalográficos). Se seleccionan por defecto todos los residuos HETATM "
-    "para eliminarlos — desmarca los que quieras conservar."
-)
 
 _WATER_MODEL_HELP_TEXT = (
     "El modelo de agua elegido aquí queda registrado en la topología, y el "
@@ -62,7 +49,9 @@ class StepStructureWidget(StepBase):
         "coordenadas, obtienes un .gro y una topología (los parámetros de "
         "campo de fuerza) listos para el resto del flujo. Si ya tienes ambos "
         "—por ejemplo, de ATB o LigParGen— puedes saltarte la generación e "
-        "indicar directamente dónde están tus archivos."
+        "indicar directamente dónde están tus archivos. Si tu estructura trae "
+        "aguas cristalográficas u otras moléculas que no quieres incluir, "
+        "límpiala primero en el paso 'Limpieza'."
     )
 
     def __init__(
@@ -73,7 +62,6 @@ class StepStructureWidget(StepBase):
         self._input_path: Path | None = None
         self._own_coords_path: Path | None = None
         self._own_topology_path: Path | None = None
-        self._residue_checkboxes: dict[str, QCheckBox] = {}
 
         self._build_mode_selector()
         self._build_generate_section()
@@ -132,16 +120,6 @@ class StepStructureWidget(StepBase):
         picker_row.addWidget(self._input_label, 1)
         picker_row.addWidget(browse_button)
         generate_form.addRow("Structure file (.pdb or .gro):", picker_row)
-
-        self._cleanup_group = QGroupBox("Limpiar estructura")
-        cleanup_layout = QVBoxLayout(self._cleanup_group)
-        help_label = QLabel(_CLEANUP_HELP_TEXT)
-        help_label.setWordWrap(True)
-        cleanup_layout.addWidget(help_label)
-        self._residue_list_layout = QVBoxLayout()
-        cleanup_layout.addLayout(self._residue_list_layout)
-        self._cleanup_group.setVisible(False)
-        generate_form.addRow(self._cleanup_group)
 
         self.force_field_combo = QComboBox()
         self.water_model_combo = QComboBox()
@@ -256,31 +234,6 @@ class StepStructureWidget(StepBase):
     def _set_structure_path(self, path: Path) -> None:
         self._input_path = path
         self._input_label.setText(path.name)
-        self._rebuild_residue_checklist()
-
-    def _rebuild_residue_checklist(self) -> None:
-        while self._residue_list_layout.count():
-            item = self._residue_list_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-        self._residue_checkboxes.clear()
-
-        if self._input_path is None or self._input_path.suffix.lower() != ".pdb":
-            self._cleanup_group.setVisible(False)
-            return
-
-        residues = list_heteroatom_residues(self._input_path)
-        if not residues:
-            self._cleanup_group.setVisible(False)
-            return
-
-        for name, count in sorted(residues.items()):
-            checkbox = QCheckBox(f"{name} ×{count}")
-            checkbox.setChecked(True)
-            self._residue_list_layout.addWidget(checkbox)
-            self._residue_checkboxes[name] = checkbox
-        self._cleanup_group.setVisible(True)
 
     # --- bring-your-own-mode fields ---
     def _on_browse_own_coords_clicked(self) -> None:
@@ -360,15 +313,6 @@ class StepStructureWidget(StepBase):
         assert self._input_path is not None
         structure_dir = self.project.step_dir(self.step_name)
 
-        source_pdb = self._input_path
-        residues_to_remove = {
-            name for name, checkbox in self._residue_checkboxes.items() if checkbox.isChecked()
-        }
-        if residues_to_remove:
-            cleaned_pdb = structure_dir / "cleaned.pdb"
-            remove_residues(source_pdb, cleaned_pdb, residues_to_remove)
-            source_pdb = cleaned_pdb
-
         force_field = self.force_field_combo.currentData()
         water_model = self.water_model_combo.currentData()
         self.project.manifest.force_field = force_field
@@ -376,7 +320,7 @@ class StepStructureWidget(StepBase):
 
         topology_dir = self.project.root / "topology"
         args = build_pdb2gmx_command(
-            source_pdb,
+            self._input_path,
             structure_dir / conventions.STRUCTURE_GRO,
             topology_dir / conventions.TOPOLOGY_TOP,
             topology_dir / conventions.POSRE_ITP,

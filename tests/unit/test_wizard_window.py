@@ -10,13 +10,21 @@ def _is_enabled(list_widget, row):
     return bool(list_widget.item(row).flags() & Qt.ItemFlag.ItemIsEnabled)
 
 
-def test_only_first_row_enabled_for_a_fresh_project(qtbot, tmp_path):
+def test_cleanup_row_is_always_enabled(qtbot, tmp_path):
     project = Project.create(tmp_path / "proj")
     wizard = WizardWindow(project, gmx_env={})
     qtbot.addWidget(wizard)
 
-    assert _is_enabled(wizard._sidebar, 0)  # structure
-    assert not _is_enabled(wizard._sidebar, 1)  # box
+    assert _is_enabled(wizard._sidebar, 0)  # 0. Limpieza — never gated
+
+
+def test_only_first_pipeline_row_enabled_for_a_fresh_project(qtbot, tmp_path):
+    project = Project.create(tmp_path / "proj")
+    wizard = WizardWindow(project, gmx_env={})
+    qtbot.addWidget(wizard)
+
+    assert _is_enabled(wizard._sidebar, 1)  # structure
+    assert not _is_enabled(wizard._sidebar, 2)  # box
 
 
 def test_finishing_a_step_enables_the_next_row(qtbot, tmp_path):
@@ -26,7 +34,7 @@ def test_finishing_a_step_enables_the_next_row(qtbot, tmp_path):
 
     project.record_step_finished("structure", output_files=[])
 
-    assert _is_enabled(wizard._sidebar, 1)  # box now ready
+    assert _is_enabled(wizard._sidebar, 2)  # box now ready
 
 
 def test_analysis_row_reflects_files_actually_on_disk(qtbot, tmp_path):

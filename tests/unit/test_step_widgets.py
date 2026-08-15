@@ -42,46 +42,6 @@ def test_step_structure_valid_once_file_and_ff_selected(qtbot, tmp_path):
     assert commands[0].args[0] == "pdb2gmx"
 
 
-def test_step_structure_hetatm_checklist_defaults_to_all_checked(qtbot, tmp_path):
-    project = Project.create(tmp_path / "proj")
-    widget = StepStructureWidget(project, _fake_gmx_env(tmp_path))
-    qtbot.addWidget(widget)
-    pdb = tmp_path / "in.pdb"
-    pdb.write_text(
-        "ATOM      1  CA  ALA A   1      0.000   0.000   0.000\n"
-        "HETATM    2  O   HOH A 200      1.000   1.000   1.000\n"
-        "HETATM    3  C1  LIG A 201      2.000   2.000   2.000\n"
-    )
-
-    widget._set_structure_path(pdb)
-
-    assert not widget._cleanup_group.isHidden()
-    assert set(widget._residue_checkboxes) == {"HOH", "LIG"}
-    assert all(cb.isChecked() for cb in widget._residue_checkboxes.values())
-
-    # unchecking LIG means it's kept in the cleaned file build_commands() writes
-    widget._residue_checkboxes["LIG"].setChecked(False)
-    widget.force_field_combo.setCurrentIndex(0)
-    widget.build_commands()
-
-    cleaned_text = (project.step_dir("structure") / "cleaned.pdb").read_text()
-    assert "LIG" in cleaned_text
-    assert "HOH" not in cleaned_text
-
-
-def test_step_structure_gro_input_has_no_cleanup_section(qtbot, tmp_path):
-    project = Project.create(tmp_path / "proj")
-    widget = StepStructureWidget(project, _fake_gmx_env(tmp_path))
-    qtbot.addWidget(widget)
-    gro = tmp_path / "in.gro"
-    gro.write_text("fake gro\n")
-
-    widget._set_structure_path(gro)
-
-    assert widget._cleanup_group.isHidden()
-    assert widget._residue_checkboxes == {}
-
-
 def test_step_structure_bring_own_topology_stages_files_without_gmx(qtbot, tmp_path):
     project = Project.create(tmp_path / "proj")
     widget = StepStructureWidget(project, _fake_gmx_env(tmp_path))
