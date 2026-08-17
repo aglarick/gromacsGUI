@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from gromacs_gui.gmx.structure_files import list_residues, remove_residues
+from gromacs_gui.gmx.structure_files import extract_first_instance, list_residues, remove_residues
 
 PDB_SAMPLE = (
     "ATOM      1  CA  ALA A   1      0.000   0.000   0.000\n"
@@ -14,6 +14,21 @@ GRO_SAMPLE = (
     "    1ALA      CA    1   0.000   0.000   0.000\n"
     "  200HOH       O    2   1.000   1.000   1.000\n"
     "  201LIG      C1    3   2.000   2.000   2.000\n"
+    "   3.00000   3.00000   3.00000\n"
+)
+
+PDB_REPEATED_HOH = (
+    "ATOM      1  CA  ALA A   1      0.000   0.000   0.000\n"
+    "HETATM    2  O   HOH A 200      1.000   1.000   1.000\n"
+    "HETATM    3  O   HOH A 201      2.000   2.000   2.000\n"
+)
+
+GRO_REPEATED_HOH = (
+    "Test system\n"
+    "    3\n"
+    "    1ALA      CA    1   0.000   0.000   0.000\n"
+    "  200HOH       O    2   1.000   1.000   1.000\n"
+    "  201HOH       O    3   2.000   2.000   2.000\n"
     "   3.00000   3.00000   3.00000\n"
 )
 
@@ -57,4 +72,31 @@ def test_remove_residues_gro_updates_atom_count_header(tmp_path):
     assert not any("HOH" in line for line in lines)
     assert any("ALA" in line for line in lines)
     assert any("LIG" in line for line in lines)
+    assert lines[-1].strip() == "3.00000   3.00000   3.00000"
+
+
+def test_extract_first_instance_pdb_keeps_only_one_copy(tmp_path):
+    pdb = tmp_path / "in.pdb"
+    pdb.write_text(PDB_REPEATED_HOH)
+    output = tmp_path / "out.pdb"
+
+    extract_first_instance(pdb, output, {"HOH"})
+
+    text = output.read_text()
+    assert text.count("HOH") == 1
+    assert "ALA" not in text
+    assert "200" in text  # kept the first instance, not the second
+    assert "201" not in text
+
+
+def test_extract_first_instance_gro_keeps_only_one_copy(tmp_path):
+    gro = tmp_path / "in.gro"
+    gro.write_text(GRO_REPEATED_HOH)
+    output = tmp_path / "out.gro"
+
+    extract_first_instance(gro, output, {"HOH"})
+
+    lines = output.read_text().splitlines()
+    assert lines[1].strip() == "1"
+    assert lines[2].strip().startswith("200HOH")
     assert lines[-1].strip() == "3.00000   3.00000   3.00000"

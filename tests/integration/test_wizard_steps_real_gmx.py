@@ -40,8 +40,8 @@ def test_full_wizard_ui_pipeline_structure_through_ions(qtbot, tmp_path, gmx_env
     qtbot.addWidget(cleanup_widget)
     cleanup_widget._set_input_path(FIXTURE_PDB)
     assert cleanup_widget._residue_checkboxes["HOH"].isChecked() is False  # not kept by default
-    cleanup_widget._on_save_clicked()
     cleaned_pdb = project.root / "cleanup" / "1aki_cleaned.pdb"
+    cleanup_widget._save_to(cleaned_pdb)
     assert cleaned_pdb.is_file()
 
     structure_widget = StepStructureWidget(project, env)

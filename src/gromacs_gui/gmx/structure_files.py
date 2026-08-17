@@ -29,6 +29,18 @@ def remove_residues(input_path: Path, output_path: Path, residue_names: set[str]
         _remove_residues_pdb(input_path, output_path, residue_names)
 
 
+def extract_first_instance(input_path: Path, output_path: Path, residue_names: set[str]) -> None:
+    """Write only the first molecule instance (in file order) whose residue
+    name is in residue_names, discarding every other atom. Used to isolate a
+    single copy of a repeated molecule out of a box (e.g. one SOL out of
+    hundreds) rather than keeping every instance of that residue name.
+    """
+    if Path(input_path).suffix.lower() == ".gro":
+        _extract_first_instance_gro(input_path, output_path, residue_names)
+    else:
+        _extract_first_instance_pdb(input_path, output_path, residue_names)
+
+
 def _list_residues_pdb(pdb_path: Path) -> dict[str, int]:
     counts: dict[str, int] = {}
     for line in Path(pdb_path).read_text(errors="replace").splitlines():
@@ -46,6 +58,25 @@ def _remove_residues_pdb(input_path: Path, output_path: Path, residue_names: set
         line
         for line in lines
         if not (line.startswith(("ATOM", "HETATM")) and line[17:20].strip() in residue_names)
+    ]
+    Path(output_path).write_text("".join(kept))
+
+
+def _extract_first_instance_pdb(
+    input_path: Path, output_path: Path, residue_names: set[str]
+) -> None:
+    lines = Path(input_path).read_text(errors="replace").splitlines(keepends=True)
+
+    target_key = None
+    for line in lines:
+        if line.startswith(("ATOM", "HETATM")) and line[17:20].strip() in residue_names:
+            target_key = line[21:27]  # chain + resSeq + iCode: one instance
+            break
+
+    kept = [
+        line
+        for line in lines
+        if not line.startswith(("ATOM", "HETATM")) or line[21:27] == target_key
     ]
     Path(output_path).write_text("".join(kept))
 
@@ -72,6 +103,30 @@ def _remove_residues_gro(input_path: Path, output_path: Path, residue_names: set
     box_line = lines[2 + len(atom_lines)] if len(lines) > 2 + len(atom_lines) else ""
 
     kept_atom_lines = [line for line in atom_lines if line[5:10].strip() not in residue_names]
+
+    output_lines = [title, str(len(kept_atom_lines)), *kept_atom_lines, box_line]
+    Path(output_path).write_text("\n".join(output_lines) + "\n")
+
+
+def _extract_first_instance_gro(
+    input_path: Path, output_path: Path, residue_names: set[str]
+) -> None:
+    lines = Path(input_path).read_text(errors="replace").splitlines()
+    if len(lines) < 3:
+        Path(output_path).write_text("\n".join(lines) + ("\n" if lines else ""))
+        return
+
+    title = lines[0]
+    atom_lines = _gro_atom_lines(lines)
+    box_line = lines[2 + len(atom_lines)] if len(lines) > 2 + len(atom_lines) else ""
+
+    target_resid = None
+    for line in atom_lines:
+        if line[5:10].strip() in residue_names:
+            target_resid = line[0:5]  # resid field: one molecule instance
+            break
+
+    kept_atom_lines = [line for line in atom_lines if line[0:5] == target_resid]
 
     output_lines = [title, str(len(kept_atom_lines)), *kept_atom_lines, box_line]
     Path(output_path).write_text("\n".join(output_lines) + "\n")

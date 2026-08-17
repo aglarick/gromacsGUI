@@ -15,23 +15,37 @@ from PySide6.QtWidgets import (
 
 from gromacs_gui.core.project import Project
 from gromacs_gui.gmx.commands.pdb2gmx import list_heteroatom_residues
-from gromacs_gui.gmx.structure_files import list_residues, remove_residues
+from gromacs_gui.gmx.structure_files import extract_first_instance, list_residues, remove_residues
 
 _DESCRIPTION = (
     "Herramienta de limpieza: carga cualquier archivo de estructura o caja "
-    "(.pdb o .gro), revisa qué moléculas contiene, y marca las que quieres "
-    "CONSERVAR — el resto se descarta. Útil para extraer una sola molécula "
-    "de una caja con varias combinadas (p. ej. para usarla después en el "
-    "paso 'Structure'). No genera topología ni avanza el flujo, y no es "
-    "obligatorio usarla."
+    "(.pdb o .gro), revisa qué tipos de moléculas contiene, y marca las que "
+    "quieres CONSERVAR — el resto se descarta. Por defecto, todo queda "
+    "marcado salvo las moléculas HETATM (agua cristalográfica, iones, "
+    "ligandos u otros residuos que no forman parte de la estructura "
+    "principal), si las hay. Usa el botón 'Extract all molecules' / "
+    "'Extract one molecule' para elegir si quieres todas las copias de los "
+    "tipos marcados o solo una — útil para aislar una única molécula de una "
+    "caja combinada (p. ej. para usarla después en el paso 'Structure'). No "
+    "genera topología ni avanza el flujo, y no es obligatorio usarla; puedes "
+    "correrla varias veces con distintos archivos para ir armando piezas "
+    "individuales."
+)
+
+_HETATM_HINT = (
+    "Se detectaron moléculas HETATM (no forman parte de la estructura "
+    "principal — p. ej. agua cristalográfica, iones o ligandos): {names}. "
+    "Por defecto quedaron excluidas de la selección; márcalas de nuevo si "
+    "las necesitas."
 )
 
 
 class CleanupToolWidget(QWidget):
     """Standalone structure-cleaning tool, not a pipeline step: it doesn't
     touch Project's manifest and isn't gated by (or gates) anything else.
-    Cleaned files land in the project folder for convenience, but using this
-    tool is entirely optional.
+    Cleaned files are saved wherever the user chooses via a save dialog, so
+    the tool can be run repeatedly against different sources to build up
+    individual molecule files.
     """
 
     def __init__(
@@ -41,9 +55,14 @@ class CleanupToolWidget(QWidget):
         self.project = project
         self._input_path: Path | None = None
         self._residue_checkboxes: dict[str, QCheckBox] = {}
+        self._hetatm_names: set[str] = set()
 
         description = QLabel(_DESCRIPTION, self)
         description.setWordWrap(True)
+
+        self._hetatm_hint_label = QLabel("", self)
+        self._hetatm_hint_label.setWordWrap(True)
+        self._hetatm_hint_label.setVisible(False)
 
         self._input_label = QLabel("No file selected")
         browse_button = QPushButton("Browse…")
@@ -56,14 +75,18 @@ class CleanupToolWidget(QWidget):
         select_all_button.clicked.connect(lambda: self._set_all_checked(True))
         select_none_button = QPushButton("Deseleccionar todo")
         select_none_button.clicked.connect(lambda: self._set_all_checked(False))
+        self._extract_mode_button = QPushButton("Extract all molecules")
+        self._extract_mode_button.setCheckable(True)
+        self._extract_mode_button.toggled.connect(self._on_extract_mode_toggled)
         select_row = QHBoxLayout()
         select_row.addWidget(select_all_button)
         select_row.addWidget(select_none_button)
         select_row.addStretch(1)
+        select_row.addWidget(self._extract_mode_button)
 
         self._residue_list_layout = QVBoxLayout()
 
-        self._save_button = QPushButton("Guardar selección")
+        self._save_button = QPushButton("Guardar selección…")
         self._save_button.setEnabled(False)
         self._save_button.clicked.connect(self._on_save_clicked)
 
@@ -72,6 +95,7 @@ class CleanupToolWidget(QWidget):
 
         layout = QVBoxLayout(self)
         layout.addWidget(description)
+        layout.addWidget(self._hetatm_hint_label)
         layout.addLayout(picker_row)
         layout.addLayout(select_row)
         layout.addLayout(self._residue_list_layout)
@@ -106,12 +130,24 @@ class CleanupToolWidget(QWidget):
 
         if self._input_path is None:
             self._save_button.setEnabled(False)
+            self._hetatm_hint_label.setVisible(False)
             return
 
         residues = list_residues(self._input_path)
-        default_kept = self._default_kept_candidates(self._input_path, residues)
+        self._hetatm_names = self._detect_hetatm_names(self._input_path)
+        default_kept = set(residues) - self._hetatm_names
+
+        if self._hetatm_names:
+            self._hetatm_hint_label.setText(
+                _HETATM_HINT.format(names=", ".join(sorted(self._hetatm_names)))
+            )
+            self._hetatm_hint_label.setVisible(True)
+        else:
+            self._hetatm_hint_label.setVisible(False)
+
         for name, count in sorted(residues.items()):
-            checkbox = QCheckBox(f"{name} ×{count}")
+            tag = " [HETATM]" if name in self._hetatm_names else ""
+            checkbox = QCheckBox(f"{name}{tag} ×{count}")
             checkbox.setChecked(name in default_kept)
             self._residue_list_layout.addWidget(checkbox)
             self._residue_checkboxes[name] = checkbox
@@ -119,37 +155,61 @@ class CleanupToolWidget(QWidget):
         self._save_button.setEnabled(bool(residues))
 
     @staticmethod
-    def _default_kept_candidates(path: Path, residues: dict[str, int]) -> set[str]:
-        """Pre-check residues to keep: for .pdb, everything except HETATM
-        (crystallographic water, ions, buffer components) - the same net
-        effect as the old "remove HETATM by default" behavior, just phrased
-        as "keep". .gro has no ATOM/HETATM marker to tell apart, so instead
-        of guessing, everything defaults kept (a safe no-op save) - use
-        "Deseleccionar todo" to start from an empty selection when extracting
-        a single molecule out of a combined box.
+    def _detect_hetatm_names(path: Path) -> set[str]:
+        """Which residue names are HETATM records - only meaningful for
+        .pdb, since .gro has no ATOM/HETATM distinction to scan at all.
         """
         if path.suffix.lower() == ".pdb":
-            return set(residues) - set(list_heteroatom_residues(path))
-        return set(residues)
+            return set(list_heteroatom_residues(path))
+        return set()
 
     def _set_all_checked(self, checked: bool) -> None:
         for checkbox in self._residue_checkboxes.values():
             checkbox.setChecked(checked)
 
+    def _on_extract_mode_toggled(self, checked: bool) -> None:
+        self._extract_mode_button.setText(
+            "Extract one molecule" if checked else "Extract all molecules"
+        )
+
     def _on_save_clicked(self) -> None:
+        output_path = self._prompt_save_path()
+        if output_path is None:
+            return
+        self._save_to(output_path)
+
+    def _prompt_save_path(self) -> Path | None:
+        assert self._input_path is not None
+        cleanup_dir = self.project.root / "cleanup"
+        cleanup_dir.mkdir(exist_ok=True)
+        suggested_name = f"{self._input_path.stem}_cleaned{self._input_path.suffix}"
+        suggested_path = cleanup_dir / suggested_name
+        is_pdb = self._input_path.suffix.lower() == ".pdb"
+        file_filter = "PDB files (*.pdb)" if is_pdb else "GRO files (*.gro)"
+        path_str, _ = QFileDialog.getSaveFileName(
+            self, "Guardar archivo limpio", str(suggested_path), file_filter
+        )
+        return Path(path_str) if path_str else None
+
+    def _save_to(self, output_path: Path) -> None:
         assert self._input_path is not None
         residues_to_keep = {
             name for name, checkbox in self._residue_checkboxes.items() if checkbox.isChecked()
         }
-        residues_to_remove = set(self._residue_checkboxes) - residues_to_keep
 
-        cleanup_dir = self.project.root / "cleanup"
-        cleanup_dir.mkdir(exist_ok=True)
-        output_path = cleanup_dir / f"{self._input_path.stem}_cleaned{self._input_path.suffix}"
+        if not residues_to_keep:
+            self._status_label.setText("Selecciona al menos un tipo de molécula antes de guardar.")
+            return
 
-        if residues_to_remove:
-            remove_residues(self._input_path, output_path, residues_to_remove)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if self._extract_mode_button.isChecked():
+            extract_first_instance(self._input_path, output_path, residues_to_keep)
         else:
-            shutil.copyfile(self._input_path, output_path)
+            residues_to_remove = set(self._residue_checkboxes) - residues_to_keep
+            if residues_to_remove:
+                remove_residues(self._input_path, output_path, residues_to_remove)
+            else:
+                shutil.copyfile(self._input_path, output_path)
 
-        self._status_label.setText(f"Guardado en: {output_path.relative_to(self.project.root)}")
+        self._status_label.setText(f"Guardado en: {output_path}")
