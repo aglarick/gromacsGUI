@@ -15,6 +15,25 @@ PDB_WITH_REPEATED_HOH = (
     "HETATM    3  O   HOH A 201      2.000   2.000   2.000\n"
 )
 
+
+class _FakeViewer:
+    """Stand-in for MoleculeViewer3D that records what the widget asked it
+    to render, without touching matplotlib/Qt canvases.
+    """
+
+    def __init__(self) -> None:
+        self.last_atoms: list | None = None
+        self.last_message: str | None = None
+
+    def set_atoms(self, atoms: list) -> None:
+        self.last_atoms = atoms
+        self.last_message = None
+
+    def show_message(self, text: str) -> None:
+        self.last_message = text
+        self.last_atoms = None
+
+
 GRO_WITH_REPEATED_HOH = (
     "Test system\n"
     "    3\n"
@@ -245,6 +264,70 @@ def test_save_with_nothing_checked_refuses_to_write(qtbot, tmp_path):
 
     assert not output.exists()
     assert "Selecciona al menos" in widget._status_label.text()
+
+
+def test_preview_reflects_default_selection_on_load(qtbot, tmp_path):
+    project = Project.create(tmp_path / "proj")
+    widget = CleanupToolWidget(project, {})
+    qtbot.addWidget(widget)
+    fake_viewer = _FakeViewer()
+    widget._viewer = fake_viewer
+
+    pdb = tmp_path / "system.pdb"
+    pdb.write_text(PDB_WITH_HETATM)
+    widget._set_input_path(pdb)
+
+    assert fake_viewer.last_atoms is not None
+    assert {a.residue_name for a in fake_viewer.last_atoms} == {"ALA"}
+
+
+def test_preview_updates_when_checkbox_toggled(qtbot, tmp_path):
+    project = Project.create(tmp_path / "proj")
+    widget = CleanupToolWidget(project, {})
+    qtbot.addWidget(widget)
+    fake_viewer = _FakeViewer()
+    widget._viewer = fake_viewer
+
+    pdb = tmp_path / "system.pdb"
+    pdb.write_text(PDB_WITH_HETATM)
+    widget._set_input_path(pdb)
+
+    widget._residue_checkboxes["LIG"].setChecked(True)
+    assert {a.residue_name for a in fake_viewer.last_atoms} == {"ALA", "LIG"}
+
+
+def test_preview_reflects_extract_one_molecule_mode(qtbot, tmp_path):
+    project = Project.create(tmp_path / "proj")
+    widget = CleanupToolWidget(project, {})
+    qtbot.addWidget(widget)
+    fake_viewer = _FakeViewer()
+    widget._viewer = fake_viewer
+
+    pdb = tmp_path / "system.pdb"
+    pdb.write_text(PDB_WITH_REPEATED_HOH)
+    widget._set_input_path(pdb)
+    widget._set_all_checked(False)
+    widget._residue_checkboxes["HOH"].setChecked(True)
+
+    widget._extract_mode_button.setChecked(True)
+
+    assert len(fake_viewer.last_atoms) == 1
+    assert fake_viewer.last_atoms[0].residue_name == "HOH"
+
+
+def test_preview_shows_nothing_when_selection_is_empty(qtbot, tmp_path):
+    project = Project.create(tmp_path / "proj")
+    widget = CleanupToolWidget(project, {})
+    qtbot.addWidget(widget)
+    fake_viewer = _FakeViewer()
+    widget._viewer = fake_viewer
+
+    pdb = tmp_path / "system.pdb"
+    pdb.write_text(PDB_WITH_HETATM)
+    widget._set_input_path(pdb)
+    widget._set_all_checked(False)
+
+    assert fake_viewer.last_atoms == []
 
 
 def test_does_not_gate_or_record_project_step_state(qtbot, tmp_path):

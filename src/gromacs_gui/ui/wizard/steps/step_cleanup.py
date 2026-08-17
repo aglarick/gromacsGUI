@@ -15,7 +15,15 @@ from PySide6.QtWidgets import (
 
 from gromacs_gui.core.project import Project
 from gromacs_gui.gmx.commands.pdb2gmx import list_heteroatom_residues
-from gromacs_gui.gmx.structure_files import extract_first_instance, list_residues, remove_residues
+from gromacs_gui.gmx.structure_files import (
+    AtomPosition,
+    extract_first_instance,
+    list_residues,
+    read_atom_positions,
+    remove_residues,
+    select_preview_atoms,
+)
+from gromacs_gui.ui.widgets.molecule_viewer import MoleculeViewer3D
 
 _DESCRIPTION = (
     "Herramienta de limpieza: carga cualquier archivo de estructura o caja "
@@ -56,6 +64,7 @@ class CleanupToolWidget(QWidget):
         self._input_path: Path | None = None
         self._residue_checkboxes: dict[str, QCheckBox] = {}
         self._hetatm_names: set[str] = set()
+        self._atom_positions: list[AtomPosition] = []
 
         description = QLabel(_DESCRIPTION, self)
         description.setWordWrap(True)
@@ -93,6 +102,8 @@ class CleanupToolWidget(QWidget):
         self._status_label = QLabel("", self)
         self._status_label.setWordWrap(True)
 
+        self._viewer = MoleculeViewer3D(self)
+
         layout = QVBoxLayout(self)
         layout.addWidget(description)
         layout.addWidget(self._hetatm_hint_label)
@@ -101,7 +112,7 @@ class CleanupToolWidget(QWidget):
         layout.addLayout(self._residue_list_layout)
         layout.addWidget(self._save_button)
         layout.addWidget(self._status_label)
-        layout.addStretch(1)
+        layout.addWidget(self._viewer, 1)
 
     def _on_browse_clicked(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -131,10 +142,13 @@ class CleanupToolWidget(QWidget):
         if self._input_path is None:
             self._save_button.setEnabled(False)
             self._hetatm_hint_label.setVisible(False)
+            self._atom_positions = []
+            self._refresh_preview()
             return
 
         residues = list_residues(self._input_path)
         self._hetatm_names = self._detect_hetatm_names(self._input_path)
+        self._atom_positions = read_atom_positions(self._input_path)
         default_kept = set(residues) - self._hetatm_names
 
         if self._hetatm_names:
@@ -149,10 +163,12 @@ class CleanupToolWidget(QWidget):
             tag = " [HETATM]" if name in self._hetatm_names else ""
             checkbox = QCheckBox(f"{name}{tag} ×{count}")
             checkbox.setChecked(name in default_kept)
+            checkbox.stateChanged.connect(self._refresh_preview)
             self._residue_list_layout.addWidget(checkbox)
             self._residue_checkboxes[name] = checkbox
 
         self._save_button.setEnabled(bool(residues))
+        self._refresh_preview()
 
     @staticmethod
     def _detect_hetatm_names(path: Path) -> set[str]:
@@ -165,12 +181,28 @@ class CleanupToolWidget(QWidget):
 
     def _set_all_checked(self, checked: bool) -> None:
         for checkbox in self._residue_checkboxes.values():
+            checkbox.blockSignals(True)
             checkbox.setChecked(checked)
+            checkbox.blockSignals(False)
+        self._refresh_preview()
 
     def _on_extract_mode_toggled(self, checked: bool) -> None:
         self._extract_mode_button.setText(
             "Extract one molecule" if checked else "Extract all molecules"
         )
+        self._refresh_preview()
+
+    def _refresh_preview(self) -> None:
+        if not self._atom_positions:
+            self._viewer.show_message("Selecciona un archivo para previsualizar.")
+            return
+        residues_to_keep = {
+            name for name, checkbox in self._residue_checkboxes.items() if checkbox.isChecked()
+        }
+        atoms = select_preview_atoms(
+            self._atom_positions, residues_to_keep, self._extract_mode_button.isChecked()
+        )
+        self._viewer.set_atoms(atoms)
 
     def _on_save_clicked(self) -> None:
         output_path = self._prompt_save_path()

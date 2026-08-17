@@ -9,7 +9,22 @@ multiple combined molecules, not just a single protein straight from the PDB.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+
+
+@dataclass(frozen=True)
+class AtomPosition:
+    """One atom's coordinates plus enough identity to group it into its
+    molecule instance - used for the cleanup tool's live preview, not for
+    writing files (which works on raw lines to preserve exact formatting).
+    """
+
+    residue_name: str
+    instance_key: str
+    x: float
+    y: float
+    z: float
 
 
 def list_residues(structure_path: Path) -> dict[str, int]:
@@ -39,6 +54,71 @@ def extract_first_instance(input_path: Path, output_path: Path, residue_names: s
         _extract_first_instance_gro(input_path, output_path, residue_names)
     else:
         _extract_first_instance_pdb(input_path, output_path, residue_names)
+
+
+def read_atom_positions(structure_path: Path) -> list[AtomPosition]:
+    """Parse every atom's coordinates for the cleanup tool's live preview.
+    .pdb coordinates are in angstrom, .gro in nanometers - fine since a
+    preview only ever plots one file's own atoms against each other.
+    """
+    if Path(structure_path).suffix.lower() == ".gro":
+        return _read_atom_positions_gro(structure_path)
+    return _read_atom_positions_pdb(structure_path)
+
+
+def select_preview_atoms(
+    atoms: list[AtomPosition], residue_names_to_keep: set[str], single_instance: bool
+) -> list[AtomPosition]:
+    """Filter parsed atoms the same way _save_to would filter file lines, so
+    the preview matches what saving would actually produce. When
+    single_instance is set, keeps only the first molecule instance (by file
+    order) among the kept residue names - mirroring extract_first_instance.
+    """
+    kept = [atom for atom in atoms if atom.residue_name in residue_names_to_keep]
+    if not single_instance or not kept:
+        return kept
+    target_key = kept[0].instance_key
+    return [atom for atom in kept if atom.instance_key == target_key]
+
+
+def _read_atom_positions_pdb(pdb_path: Path) -> list[AtomPosition]:
+    positions = []
+    for line in Path(pdb_path).read_text(errors="replace").splitlines():
+        if not line.startswith(("ATOM", "HETATM")):
+            continue
+        name = line[17:20].strip()
+        if not name:
+            continue
+        try:
+            x, y, z = float(line[30:38]), float(line[38:46]), float(line[46:54])
+        except ValueError:
+            continue
+        positions.append(AtomPosition(name, line[21:27], x, y, z))
+    return positions
+
+
+def _read_atom_positions_gro(gro_path: Path) -> list[AtomPosition]:
+    """Coordinates are split by whitespace rather than sliced at fixed
+    columns: .gro widens the coordinate field width dynamically for very
+    large/negative values, so the nominal 8-char field spec can't be relied
+    on - only the leading resnum/resname/atomname/atomnr columns are truly
+    fixed-width.
+    """
+    lines = Path(gro_path).read_text(errors="replace").splitlines()
+    positions = []
+    for line in _gro_atom_lines(lines):
+        name = line[5:10].strip()
+        if not name:
+            continue
+        parts = line[20:].split()
+        if len(parts) < 3:
+            continue
+        try:
+            x, y, z = float(parts[0]), float(parts[1]), float(parts[2])
+        except ValueError:
+            continue
+        positions.append(AtomPosition(name, line[0:5], x, y, z))
+    return positions
 
 
 def _list_residues_pdb(pdb_path: Path) -> dict[str, int]:
