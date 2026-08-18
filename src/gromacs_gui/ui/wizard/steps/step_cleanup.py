@@ -25,6 +25,22 @@ from gromacs_gui.gmx.structure_files import (
 )
 from gromacs_gui.ui.widgets.molecule_viewer import MoleculeViewer3D
 
+
+def _create_viewer(parent: QWidget) -> QWidget:
+    """Prefer the Mol*-based web viewer (handles far larger systems without
+    choking); fall back to the matplotlib panel if QtWebEngine isn't usable
+    on this machine (see utils/webengine_env.py) or fails for any other
+    environment-specific reason - a broken 3D preview shouldn't take down
+    the rest of the cleanup tool.
+    """
+    try:
+        from gromacs_gui.ui.widgets.molecule_viewer_web import MoleculeViewerWeb
+
+        return MoleculeViewerWeb(parent)
+    except Exception:
+        return MoleculeViewer3D(parent)
+
+
 _DESCRIPTION = (
     "Herramienta de limpieza: carga cualquier archivo de estructura o caja "
     "(.pdb o .gro), revisa qué tipos de moléculas contiene, y marca las que "
@@ -102,7 +118,7 @@ class CleanupToolWidget(QWidget):
         self._status_label = QLabel("", self)
         self._status_label.setWordWrap(True)
 
-        self._viewer = MoleculeViewer3D(self)
+        self._viewer = _create_viewer(self)
 
         layout = QVBoxLayout(self)
         layout.addWidget(description)

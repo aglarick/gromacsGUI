@@ -2,11 +2,23 @@ from __future__ import annotations
 
 from gromacs_gui.gmx.structure_files import (
     extract_first_instance,
+    format_atoms_as_pdb,
     list_residues,
     read_atom_positions,
     remove_residues,
     select_preview_atoms,
 )
+
+
+def _gro_atom_line(
+    resnum: int, resname: str, atomname: str, atomnr: int, x: float, y: float, z: float
+) -> str:
+    """Builds a line matching GROMACS's real fixed-width .gro atom format
+    (%5d%-5s%5s%5d%8.3f%8.3f%8.3f), so fixtures can't drift out of column
+    alignment the way hand-typed strings can.
+    """
+    return f"{resnum:>5}{resname:<5}{atomname:>5}{atomnr:>5}{x:>8.3f}{y:>8.3f}{z:>8.3f}"
+
 
 PDB_SAMPLE = (
     "ATOM      1  CA  ALA A   1      0.000   0.000   0.000\n"
@@ -17,9 +29,12 @@ PDB_SAMPLE = (
 GRO_SAMPLE = (
     "Test system\n"
     "    3\n"
-    "    1ALA      CA    1   0.000   0.000   0.000\n"
-    "  200HOH       O    2   1.000   1.000   1.000\n"
-    "  201LIG      C1    3   2.000   2.000   2.000\n"
+    + _gro_atom_line(1, "ALA", "CA", 1, 0.0, 0.0, 0.0)
+    + "\n"
+    + _gro_atom_line(200, "HOH", "O", 2, 1.0, 1.0, 1.0)
+    + "\n"
+    + _gro_atom_line(201, "LIG", "C1", 3, 2.0, 2.0, 2.0)
+    + "\n"
     "   3.00000   3.00000   3.00000\n"
 )
 
@@ -32,9 +47,12 @@ PDB_REPEATED_HOH = (
 GRO_REPEATED_HOH = (
     "Test system\n"
     "    3\n"
-    "    1ALA      CA    1   0.000   0.000   0.000\n"
-    "  200HOH       O    2   1.000   1.000   1.000\n"
-    "  201HOH       O    3   2.000   2.000   2.000\n"
+    + _gro_atom_line(1, "ALA", "CA", 1, 0.0, 0.0, 0.0)
+    + "\n"
+    + _gro_atom_line(200, "HOH", "O", 2, 1.0, 1.0, 1.0)
+    + "\n"
+    + _gro_atom_line(201, "HOH", "O", 3, 2.0, 2.0, 2.0)
+    + "\n"
     "   3.00000   3.00000   3.00000\n"
 )
 
@@ -115,6 +133,7 @@ def test_read_atom_positions_pdb(tmp_path):
     positions = read_atom_positions(pdb)
 
     assert [p.residue_name for p in positions] == ["ALA", "HOH", "LIG"]
+    assert positions[0].atom_name == "CA"
     assert positions[0].x == 0.0
     assert positions[2].z == 2.0
 
@@ -126,7 +145,8 @@ def test_read_atom_positions_gro(tmp_path):
     positions = read_atom_positions(gro)
 
     assert [p.residue_name for p in positions] == ["ALA", "HOH", "LIG"]
-    assert positions[1].y == 1.0
+    assert positions[1].atom_name == "O"
+    assert positions[1].y == 10.0  # nm converted to angstrom
 
 
 def test_select_preview_atoms_all_instances(tmp_path):
@@ -158,3 +178,36 @@ def test_select_preview_atoms_empty_keep_set_returns_nothing(tmp_path):
 
     assert select_preview_atoms(atoms, set(), single_instance=False) == []
     assert select_preview_atoms(atoms, set(), single_instance=True) == []
+
+
+def test_format_atoms_as_pdb_produces_parseable_fixed_width_records(tmp_path):
+    pdb = tmp_path / "in.pdb"
+    pdb.write_text(PDB_SAMPLE)
+    atoms = read_atom_positions(pdb)
+
+    text = format_atoms_as_pdb(atoms)
+    lines = text.splitlines()
+
+    assert lines[-1] == "END"
+    assert all(line.startswith("ATOM") for line in lines[:-1])
+    for line in lines[:-1]:
+        # Coordinate columns must be numeric and in the standard PDB slots.
+        float(line[30:38])
+        float(line[38:46])
+        float(line[46:54])
+    assert "ALA" in lines[0]
+    assert "HOH" in lines[1]
+    assert "LIG" in lines[2]
+
+
+def test_format_atoms_as_pdb_round_trips_coordinates(tmp_path):
+    pdb = tmp_path / "in.pdb"
+    pdb.write_text(PDB_SAMPLE)
+    atoms = read_atom_positions(pdb)
+
+    text = format_atoms_as_pdb(atoms)
+    lines = text.splitlines()
+
+    assert float(lines[2][30:38]) == 2.0
+    assert float(lines[2][38:46]) == 2.0
+    assert float(lines[2][46:54]) == 2.0

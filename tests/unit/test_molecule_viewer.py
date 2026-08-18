@@ -16,8 +16,8 @@ def test_set_atoms_renders_a_scatter_per_residue(qtbot):
     qtbot.addWidget(viewer)
 
     atoms = [
-        AtomPosition("ALA", "A1", 0.0, 0.0, 0.0),
-        AtomPosition("HOH", "A2", 1.0, 1.0, 1.0),
+        AtomPosition("ALA", "CA", "A1", 0.0, 0.0, 0.0),
+        AtomPosition("HOH", "O", "A2", 1.0, 1.0, 1.0),
     ]
     viewer.set_atoms(atoms)
 
@@ -36,7 +36,7 @@ def test_set_atoms_with_empty_list_shows_message(qtbot):
 def test_oversized_selection_falls_back_to_message_instead_of_freezing(qtbot):
     viewer = MoleculeViewer3D()
     qtbot.addWidget(viewer)
-    atoms = [AtomPosition("SOL", str(i), 0.0, 0.0, 0.0) for i in range(25000)]
+    atoms = [AtomPosition("SOL", "O", str(i), 0.0, 0.0, 0.0) for i in range(25000)]
 
     viewer.set_atoms(atoms)
 

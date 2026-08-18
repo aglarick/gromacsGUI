@@ -18,9 +18,13 @@ class AtomPosition:
     """One atom's coordinates plus enough identity to group it into its
     molecule instance - used for the cleanup tool's live preview, not for
     writing files (which works on raw lines to preserve exact formatting).
+    Coordinates are always in angstrom (.gro's native nanometers are
+    converted on read) so a synthesized preview PDB is unit-correct
+    regardless of the source format.
     """
 
     residue_name: str
+    atom_name: str
     instance_key: str
     x: float
     y: float
@@ -57,13 +61,35 @@ def extract_first_instance(input_path: Path, output_path: Path, residue_names: s
 
 
 def read_atom_positions(structure_path: Path) -> list[AtomPosition]:
-    """Parse every atom's coordinates for the cleanup tool's live preview.
-    .pdb coordinates are in angstrom, .gro in nanometers - fine since a
-    preview only ever plots one file's own atoms against each other.
-    """
+    """Parse every atom's coordinates for the cleanup tool's live preview."""
     if Path(structure_path).suffix.lower() == ".gro":
         return _read_atom_positions_gro(structure_path)
     return _read_atom_positions_pdb(structure_path)
+
+
+def format_atoms_as_pdb(atoms: list[AtomPosition]) -> str:
+    """Synthesize a minimal PDB text from parsed preview atoms, purely to
+    feed an external molecular viewer - never written to disk as the tool's
+    actual saved output, so residue/atom numbering here is just sequential
+    order, not the original file's own numbers.
+    """
+    lines = []
+    instance_order: dict[str, int] = {}
+    for serial, atom in enumerate(atoms, start=1):
+        res_seq = instance_order.setdefault(atom.instance_key, len(instance_order) + 1)
+        name = atom.atom_name[:4]
+        name_field = name if len(name) == 4 else f" {name:<3}"
+        lines.append(
+            "ATOM  "
+            f"{serial:>5} "
+            f"{name_field:<4} "
+            f"{atom.residue_name[:3]:>3} A"
+            f"{res_seq:>4}    "
+            f"{atom.x:>8.3f}{atom.y:>8.3f}{atom.z:>8.3f}"
+            "  1.00  0.00\n"
+        )
+    lines.append("END\n")
+    return "".join(lines)
 
 
 def select_preview_atoms(
@@ -93,7 +119,8 @@ def _read_atom_positions_pdb(pdb_path: Path) -> list[AtomPosition]:
             x, y, z = float(line[30:38]), float(line[38:46]), float(line[46:54])
         except ValueError:
             continue
-        positions.append(AtomPosition(name, line[21:27], x, y, z))
+        atom_name = line[12:16].strip()
+        positions.append(AtomPosition(name, atom_name, line[21:27], x, y, z))
     return positions
 
 
@@ -102,7 +129,8 @@ def _read_atom_positions_gro(gro_path: Path) -> list[AtomPosition]:
     columns: .gro widens the coordinate field width dynamically for very
     large/negative values, so the nominal 8-char field spec can't be relied
     on - only the leading resnum/resname/atomname/atomnr columns are truly
-    fixed-width.
+    fixed-width. .gro coordinates are in nanometers; multiply by 10 so
+    AtomPosition is always angstrom, regardless of source format.
     """
     lines = Path(gro_path).read_text(errors="replace").splitlines()
     positions = []
@@ -114,10 +142,11 @@ def _read_atom_positions_gro(gro_path: Path) -> list[AtomPosition]:
         if len(parts) < 3:
             continue
         try:
-            x, y, z = float(parts[0]), float(parts[1]), float(parts[2])
+            x, y, z = float(parts[0]) * 10, float(parts[1]) * 10, float(parts[2]) * 10
         except ValueError:
             continue
-        positions.append(AtomPosition(name, line[0:5], x, y, z))
+        atom_name = line[10:15].strip()
+        positions.append(AtomPosition(name, atom_name, line[0:5], x, y, z))
     return positions
 
 
