@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from gromacs_gui.gmx.structure_files import (
-    extract_first_instance,
     format_atoms_as_pdb,
     list_residues,
     read_atom_positions,
@@ -42,18 +41,6 @@ PDB_REPEATED_HOH = (
     "ATOM      1  CA  ALA A   1      0.000   0.000   0.000\n"
     "HETATM    2  O   HOH A 200      1.000   1.000   1.000\n"
     "HETATM    3  O   HOH A 201      2.000   2.000   2.000\n"
-)
-
-GRO_REPEATED_HOH = (
-    "Test system\n"
-    "    3\n"
-    + _gro_atom_line(1, "ALA", "CA", 1, 0.0, 0.0, 0.0)
-    + "\n"
-    + _gro_atom_line(200, "HOH", "O", 2, 1.0, 1.0, 1.0)
-    + "\n"
-    + _gro_atom_line(201, "HOH", "O", 3, 2.0, 2.0, 2.0)
-    + "\n"
-    "   3.00000   3.00000   3.00000\n"
 )
 
 
@@ -99,33 +86,6 @@ def test_remove_residues_gro_updates_atom_count_header(tmp_path):
     assert lines[-1].strip() == "3.00000   3.00000   3.00000"
 
 
-def test_extract_first_instance_pdb_keeps_only_one_copy(tmp_path):
-    pdb = tmp_path / "in.pdb"
-    pdb.write_text(PDB_REPEATED_HOH)
-    output = tmp_path / "out.pdb"
-
-    extract_first_instance(pdb, output, {"HOH"})
-
-    text = output.read_text()
-    assert text.count("HOH") == 1
-    assert "ALA" not in text
-    assert "200" in text  # kept the first instance, not the second
-    assert "201" not in text
-
-
-def test_extract_first_instance_gro_keeps_only_one_copy(tmp_path):
-    gro = tmp_path / "in.gro"
-    gro.write_text(GRO_REPEATED_HOH)
-    output = tmp_path / "out.gro"
-
-    extract_first_instance(gro, output, {"HOH"})
-
-    lines = output.read_text().splitlines()
-    assert lines[1].strip() == "1"
-    assert lines[2].strip().startswith("200HOH")
-    assert lines[-1].strip() == "3.00000   3.00000   3.00000"
-
-
 def test_read_atom_positions_pdb(tmp_path):
     pdb = tmp_path / "in.pdb"
     pdb.write_text(PDB_SAMPLE)
@@ -149,26 +109,15 @@ def test_read_atom_positions_gro(tmp_path):
     assert positions[1].y == 10.0  # nm converted to angstrom
 
 
-def test_select_preview_atoms_all_instances(tmp_path):
+def test_select_preview_atoms_keeps_all_instances_of_kept_names(tmp_path):
     pdb = tmp_path / "in.pdb"
     pdb.write_text(PDB_REPEATED_HOH)
     atoms = read_atom_positions(pdb)
 
-    selected = select_preview_atoms(atoms, {"HOH"}, single_instance=False)
+    selected = select_preview_atoms(atoms, {"HOH"})
 
     assert len(selected) == 2
     assert all(a.residue_name == "HOH" for a in selected)
-
-
-def test_select_preview_atoms_single_instance(tmp_path):
-    pdb = tmp_path / "in.pdb"
-    pdb.write_text(PDB_REPEATED_HOH)
-    atoms = read_atom_positions(pdb)
-
-    selected = select_preview_atoms(atoms, {"HOH"}, single_instance=True)
-
-    assert len(selected) == 1
-    assert selected[0].instance_key == atoms[1].instance_key  # the first HOH instance
 
 
 def test_select_preview_atoms_empty_keep_set_returns_nothing(tmp_path):
@@ -176,8 +125,7 @@ def test_select_preview_atoms_empty_keep_set_returns_nothing(tmp_path):
     pdb.write_text(PDB_SAMPLE)
     atoms = read_atom_positions(pdb)
 
-    assert select_preview_atoms(atoms, set(), single_instance=False) == []
-    assert select_preview_atoms(atoms, set(), single_instance=True) == []
+    assert select_preview_atoms(atoms, set()) == []
 
 
 def test_format_atoms_as_pdb_produces_parseable_fixed_width_records(tmp_path):

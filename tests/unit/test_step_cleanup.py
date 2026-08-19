@@ -15,6 +15,20 @@ PDB_WITH_REPEATED_HOH = (
     "HETATM    3  O   HOH A 201      2.000   2.000   2.000\n"
 )
 
+# Two separate, well-isolated single-atom "SOL" molecules, plus a POL
+# "polymer" split across two residues that share a name (mirrors a real
+# P3HT chain: every monomer is its own same-named residue) and are close
+# enough (1.5 A) to be guessed as bonded - the whole point of fragment-based
+# "extract one molecule" is that this counts as ONE molecule, not two.
+PDB_WITH_BONDED_POLYMER = (
+    "ATOM      1  O   SOL A   1       0.000   0.000   0.000  1.00  0.00\n"
+    "ATOM      2  O   SOL A   2      20.000  20.000  20.000  1.00  0.00\n"
+    "ATOM      3  C1  POL A   3      50.000   0.000   0.000  1.00  0.00\n"
+    "ATOM      4  C2  POL A   3      51.500   0.000   0.000  1.00  0.00\n"
+    "ATOM      5  C1  POL A   4      53.000   0.000   0.000  1.00  0.00\n"
+    "ATOM      6  C2  POL A   4      54.500   0.000   0.000  1.00  0.00\n"
+)
+
 
 class _FakeViewer:
     """Stand-in for MoleculeViewer3D that records what the widget asked it
@@ -32,16 +46,6 @@ class _FakeViewer:
     def show_message(self, text: str) -> None:
         self.last_message = text
         self.last_atoms = None
-
-
-GRO_WITH_REPEATED_HOH = (
-    "Test system\n"
-    "    3\n"
-    "    1ALA      CA    1   0.000   0.000   0.000\n"
-    "  200HOH       O    2   1.000   1.000   1.000\n"
-    "  201HOH       O    3   2.000   2.000   2.000\n"
-    "   3.00000   3.00000   3.00000\n"
-)
 
 
 def test_pdb_input_defaults_atom_kept_and_hetatm_not_kept(qtbot, tmp_path):
@@ -174,42 +178,46 @@ def test_extract_all_molecules_mode_keeps_every_instance(qtbot, tmp_path):
     assert text.count("HOH") == 2
 
 
-def test_extract_one_molecule_mode_keeps_only_the_first_instance_pdb(qtbot, tmp_path):
+def test_extract_one_molecule_mode_picks_one_of_several_separate_instances(qtbot, tmp_path):
     project = Project.create(tmp_path / "proj")
     widget = CleanupToolWidget(project, {})
     qtbot.addWidget(widget)
     pdb = tmp_path / "system.pdb"
-    pdb.write_text(PDB_WITH_REPEATED_HOH)
+    pdb.write_text(PDB_WITH_BONDED_POLYMER)
     widget._set_input_path(pdb)
 
     widget._set_all_checked(False)
-    widget._residue_checkboxes["HOH"].setChecked(True)
+    widget._residue_checkboxes["SOL"].setChecked(True)
     widget._extract_mode_button.setChecked(True)
-    output = project.root / "cleanup" / "one_hoh.pdb"
+    output = project.root / "cleanup" / "one_sol.pdb"
     widget._save_to(output)
 
     text = output.read_text()
-    assert text.count("HOH") == 1
-    assert "ALA" not in text
+    assert text.count("SOL") == 1  # only one of the two separate SOL atoms
+    assert "POL" not in text
 
 
-def test_extract_one_molecule_mode_keeps_only_the_first_instance_gro(qtbot, tmp_path):
+def test_extract_one_molecule_mode_keeps_the_whole_connected_molecule(qtbot, tmp_path):
+    """Regression test for the real bug: a molecule split across several
+    same-named residues (e.g. every P3HT monomer is its own "P3HT" residue)
+    must be extracted whole, not just its first residue.
+    """
     project = Project.create(tmp_path / "proj")
     widget = CleanupToolWidget(project, {})
     qtbot.addWidget(widget)
-    gro = tmp_path / "system.gro"
-    gro.write_text(GRO_WITH_REPEATED_HOH)
-    widget._set_input_path(gro)
+    pdb = tmp_path / "system.pdb"
+    pdb.write_text(PDB_WITH_BONDED_POLYMER)
+    widget._set_input_path(pdb)
 
     widget._set_all_checked(False)
-    widget._residue_checkboxes["HOH"].setChecked(True)
+    widget._residue_checkboxes["POL"].setChecked(True)
     widget._extract_mode_button.setChecked(True)
-    output = project.root / "cleanup" / "one_hoh.gro"
+    output = project.root / "cleanup" / "whole_polymer.pdb"
     widget._save_to(output)
 
-    lines = output.read_text().splitlines()
-    assert lines[1].strip() == "1"
-    assert lines[-1].strip() == "3.00000   3.00000   3.00000"
+    text = output.read_text()
+    assert text.count("POL") == 4  # both residues, all 4 atoms
+    assert "SOL" not in text
 
 
 def test_save_can_extract_a_single_molecule(qtbot, tmp_path):
@@ -297,6 +305,10 @@ def test_preview_updates_when_checkbox_toggled(qtbot, tmp_path):
 
 
 def test_preview_reflects_extract_one_molecule_mode(qtbot, tmp_path):
+    """The preview must match what saving would produce: the whole
+    connected POL molecule (4 atoms across 2 residues), not just one atom
+    or one residue.
+    """
     project = Project.create(tmp_path / "proj")
     widget = CleanupToolWidget(project, {})
     qtbot.addWidget(widget)
@@ -304,15 +316,15 @@ def test_preview_reflects_extract_one_molecule_mode(qtbot, tmp_path):
     widget._viewer = fake_viewer
 
     pdb = tmp_path / "system.pdb"
-    pdb.write_text(PDB_WITH_REPEATED_HOH)
+    pdb.write_text(PDB_WITH_BONDED_POLYMER)
     widget._set_input_path(pdb)
     widget._set_all_checked(False)
-    widget._residue_checkboxes["HOH"].setChecked(True)
+    widget._residue_checkboxes["POL"].setChecked(True)
 
     widget._extract_mode_button.setChecked(True)
 
-    assert len(fake_viewer.last_atoms) == 1
-    assert fake_viewer.last_atoms[0].residue_name == "HOH"
+    assert len(fake_viewer.last_atoms) == 4
+    assert {a.residue_name for a in fake_viewer.last_atoms} == {"POL"}
 
 
 def test_preview_shows_nothing_when_selection_is_empty(qtbot, tmp_path):

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import shutil
+import warnings
 from pathlib import Path
 
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QFileDialog,
     QHBoxLayout,
@@ -15,9 +17,13 @@ from PySide6.QtWidgets import (
 
 from gromacs_gui.core.project import Project
 from gromacs_gui.gmx.commands.pdb2gmx import list_heteroatom_residues
+from gromacs_gui.gmx.molecule_fragments import (
+    compute_fragments,
+    first_fragment_with_residue,
+    fragment_to_atom_positions,
+)
 from gromacs_gui.gmx.structure_files import (
     AtomPosition,
-    extract_first_instance,
     list_residues,
     read_atom_positions,
     remove_residues,
@@ -50,7 +56,11 @@ _DESCRIPTION = (
     "principal), si las hay. Usa el botón 'Extract all molecules' / "
     "'Extract one molecule' para elegir si quieres todas las copias de los "
     "tipos marcados o solo una — útil para aislar una única molécula de una "
-    "caja combinada (p. ej. para usarla después en el paso 'Structure'). No "
+    "caja combinada (p. ej. para usarla después en el paso 'Structure'). "
+    "'Extract one molecule' identifica la molécula completa por su "
+    "conectividad química, no por residuo — un polímero de varios "
+    "monómeros con el mismo nombre de residuo (p. ej. 1P3HT, 2P3HT, "
+    "3P3HT…) se extrae entero, no solo el primer monómero. No "
     "genera topología ni avanza el flujo, y no es obligatorio usarla; puedes "
     "correrla varias veces con distintos archivos para ir armando piezas "
     "individuales."
@@ -81,6 +91,7 @@ class CleanupToolWidget(QWidget):
         self._residue_checkboxes: dict[str, QCheckBox] = {}
         self._hetatm_names: set[str] = set()
         self._atom_positions: list[AtomPosition] = []
+        self._fragments: list | None = None  # lazily computed, see _first_matching_fragment
 
         description = QLabel(_DESCRIPTION, self)
         description.setWordWrap(True)
@@ -154,6 +165,7 @@ class CleanupToolWidget(QWidget):
             if widget is not None:
                 widget.deleteLater()
         self._residue_checkboxes.clear()
+        self._fragments = None
 
         if self._input_path is None:
             self._save_button.setEnabled(False)
@@ -215,10 +227,35 @@ class CleanupToolWidget(QWidget):
         residues_to_keep = {
             name for name, checkbox in self._residue_checkboxes.items() if checkbox.isChecked()
         }
-        atoms = select_preview_atoms(
-            self._atom_positions, residues_to_keep, self._extract_mode_button.isChecked()
-        )
+        if self._extract_mode_button.isChecked():
+            fragment = self._first_matching_fragment(residues_to_keep)
+            if fragment is None:
+                self._viewer.show_message(
+                    "Ningún fragmento conectado coincide con los tipos marcados."
+                )
+                return
+            self._viewer.set_atoms(fragment_to_atom_positions(fragment))
+            return
+        atoms = select_preview_atoms(self._atom_positions, residues_to_keep)
         self._viewer.set_atoms(atoms)
+
+    def _first_matching_fragment(self, residue_names: set[str]):
+        """Molecules are grouped by actual bond connectivity (guessed from
+        geometry), not by residue name/number - a polymer chain split
+        across many identically-named residues (e.g. every P3HT monomer is
+        its own "P3HT" residue) is one fragment, and residue numbers that
+        collide across independently-built chains never get confused for
+        the same molecule.
+        """
+        if not residue_names:
+            return None
+        if self._fragments is None:
+            assert self._input_path is not None
+            self._status_label.setText("Calculando conectividad molecular…")
+            QApplication.processEvents()
+            self._fragments = compute_fragments(self._input_path)
+            self._status_label.setText("")
+        return first_fragment_with_residue(self._fragments, residue_names)
 
     def _on_save_clicked(self) -> None:
         output_path = self._prompt_save_path()
@@ -252,7 +289,15 @@ class CleanupToolWidget(QWidget):
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         if self._extract_mode_button.isChecked():
-            extract_first_instance(self._input_path, output_path, residues_to_keep)
+            fragment = self._first_matching_fragment(residues_to_keep)
+            if fragment is None:
+                self._status_label.setText(
+                    "Ningún fragmento conectado coincide con los tipos marcados."
+                )
+                return
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                fragment.atoms.write(str(output_path))
         else:
             residues_to_remove = set(self._residue_checkboxes) - residues_to_keep
             if residues_to_remove:
