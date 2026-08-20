@@ -44,10 +44,19 @@ def list_force_fields(top_dir: Path) -> list[ForceField]:
 
 
 def list_water_models(top_dir: Path, force_field_name: str) -> list[WaterModel]:
-    """List water models available for a force field, parsed from its
-    watermodels.dat (same file `gmx pdb2gmx`'s interactive menu reads from).
+    """List water models available for a bundled force field, parsed from
+    its watermodels.dat (same file `gmx pdb2gmx`'s interactive menu reads
+    from).
     """
-    watermodels_file = Path(top_dir) / f"{force_field_name}.ff" / "watermodels.dat"
+    return list_water_models_in_folder(Path(top_dir) / f"{force_field_name}.ff")
+
+
+def list_water_models_in_folder(ff_dir: Path) -> list[WaterModel]:
+    """Same as list_water_models, but for a force field folder anywhere on
+    disk (e.g. a user-supplied custom .ff folder) rather than one composed
+    from <GMXDATA>/top/<name>.ff.
+    """
+    watermodels_file = Path(ff_dir) / "watermodels.dat"
     if not watermodels_file.is_file():
         return []
 
@@ -63,61 +72,6 @@ def list_water_models(top_dir: Path, force_field_name: str) -> list[WaterModel]:
         description = parts[2] if len(parts) > 2 else label
         models.append(WaterModel(name=name, label=label, description=description))
     return models
-
-
-# None of GROMACS's bundled force fields define a bare "HIS" residue - they
-# all only have protonation-state-specific variants (AMBER: HID/HIE/HIP,
-# CHARMM: HSD/HSE/HSP, OPLS/GROMOS: HISD/HISE/HISH...). Real PDB files
-# almost always just say "HIS" though, and pdb2gmx resolves that
-# ambiguity itself with an internal default when run non-interactively
-# (confirmed against a real build: it succeeds on plain "HIS" with no
-# prompt) - this isn't visible by scanning .rtp files, so it's special
-# cased here rather than left to silently report "unrecognized".
-_HISTIDINE_VARIANTS = {
-    "HID",
-    "HIE",
-    "HIP",
-    "HSD",
-    "HSE",
-    "HSP",
-    "HISD",
-    "HISE",
-    "HISH",
-}
-
-
-def list_recognized_residues(top_dir: Path, force_field_name: str) -> set[str]:
-    """Residue names a force field's .rtp database(s) define - the same
-    mechanism pdb2gmx itself uses to decide whether it can process a given
-    residue, so the GUI can check compatibility before offering pdb2gmx
-    rather than letting the command fail. A force field can ship more than
-    one .rtp (aminoacids.rtp, dna.rtp, rna.rtp, lipids.rtp, ...); all are
-    scanned.
-    """
-    ff_dir = Path(top_dir) / f"{force_field_name}.ff"
-    residues: set[str] = set()
-    for rtp_file in sorted(ff_dir.glob("*.rtp")):
-        residues.update(_parse_rtp_residue_names(rtp_file))
-    if residues & _HISTIDINE_VARIANTS:
-        residues.add("HIS")
-    return residues
-
-
-def _parse_rtp_residue_names(rtp_file: Path) -> set[str]:
-    """Each residue in a .rtp is a top-level `[ Name ]` section (unindented);
-    its own sub-sections (`[ atoms ]`, `[ bonds ]`, ...) use the same
-    bracket syntax but are indented, so indentation is what distinguishes
-    a residue header from one of its sub-sections. `[ bondedtypes ]` at the
-    top isn't a residue either and must be skipped.
-    """
-    names = set()
-    for line in rtp_file.read_text(errors="replace").splitlines():
-        if not line.startswith("["):
-            continue
-        name = line.strip().strip("[] \t")
-        if name and name.lower() != "bondedtypes":
-            names.add(name)
-    return names
 
 
 def _read_forcefield_doc(ff_dir: Path) -> str | None:

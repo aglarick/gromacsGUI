@@ -24,51 +24,72 @@ def test_step_structure_invalid_without_any_row_filled(qtbot, tmp_path):
     widget = StepStructureWidget(project, _fake_gmx_env(tmp_path))
     qtbot.addWidget(widget)
 
-    assert widget.force_field_combo.count() == 1
+    assert widget.force_field_combo.count() == 2  # "myff" plus "Custom .ff folder..."
     assert widget.water_model_combo.count() == 2  # "None" plus the fake ff's tip3p
     assert len(widget._rows) == 1
     assert widget.is_valid() is False
 
 
-def test_step_structure_valid_once_recognized_molecule_loaded(qtbot, tmp_path):
+def test_step_structure_valid_with_only_coordinates_generates_via_pdb2gmx(qtbot, tmp_path):
     project = Project.create(tmp_path / "proj")
     widget = StepStructureWidget(project, _fake_gmx_env(tmp_path))
     qtbot.addWidget(widget)
     pdb = tmp_path / "in.pdb"
     pdb.write_text("ATOM      1  CA  ALA A   1      0.000   0.000   0.000\n")
 
-    row = widget._rows[0]
-    row.structure_path = pdb
-    row._update_recognition()
+    widget._rows[0].structure_path = pdb
 
-    assert row.recognized is True
     assert widget.is_valid() is True
     commands = widget.build_commands()
     assert len(commands) == 1
     assert commands[0].args[0] == "pdb2gmx"
 
 
-def test_step_structure_unrecognized_row_requires_itp(qtbot, tmp_path):
+def test_step_structure_row_with_itp_does_not_run_pdb2gmx(qtbot, tmp_path):
     project = Project.create(tmp_path / "proj")
     widget = StepStructureWidget(project, _fake_gmx_env(tmp_path))
     qtbot.addWidget(widget)
     pdb = tmp_path / "in.pdb"
     pdb.write_text("ATOM      1  C1  LIG A   1      0.000   0.000   0.000\n")
+    itp = tmp_path / "lig.itp"
+    itp.write_text("[ moleculetype ]\nLIG   3\n")
 
     row = widget._rows[0]
     row.structure_path = pdb
-    row._update_recognition()
+    row.itp_path = itp
 
-    assert row.recognized is False
+    assert widget.is_valid() is True
+    assert widget.build_commands() == []
+
+
+def test_step_structure_custom_ff_folder_requires_itp_on_every_row(qtbot, tmp_path):
+    project = Project.create(tmp_path / "proj")
+    widget = StepStructureWidget(project, _fake_gmx_env(tmp_path))
+    qtbot.addWidget(widget)
+
+    custom_ff = tmp_path / "oplsaam.ff"
+    custom_ff.mkdir()
+    (custom_ff / "forcefield.itp").write_text("[ defaults ]\n1 3 yes 0.5 0.5\n")
+
+    custom_index = widget.force_field_combo.findData("__custom_ff__")
+    widget.force_field_combo.setCurrentIndex(custom_index)
+    widget._custom_ff_path = custom_ff
+
+    pdb = tmp_path / "in.pdb"
+    pdb.write_text("ATOM      1  CA  ALA A   1      0.000   0.000   0.000\n")
+    row = widget._rows[0]
+    row.structure_path = pdb
+
+    assert row.is_valid() is False
+    assert row.error_label.isHidden() is False
     assert widget.is_valid() is False
 
     itp = tmp_path / "lig.itp"
     itp.write_text("[ moleculetype ]\nLIG   3\n")
     row.itp_path = itp
-    row.itp_ff_combo.setCurrentIndex(0)
 
+    assert row.is_valid() is True
     assert widget.is_valid() is True
-    assert widget.build_commands() == []  # nothing recognized -> no pdb2gmx calls
 
 
 def test_step_structure_add_and_remove_row(qtbot, tmp_path):
@@ -85,28 +106,6 @@ def test_step_structure_add_and_remove_row(qtbot, tmp_path):
     # The last remaining row can't be removed.
     widget.remove_row(widget._rows[0])
     assert len(widget._rows) == 1
-
-
-def test_step_structure_master_top_mode_skips_row_topology_requirements(qtbot, tmp_path):
-    project = Project.create(tmp_path / "proj")
-    widget = StepStructureWidget(project, _fake_gmx_env(tmp_path))
-    qtbot.addWidget(widget)
-
-    master_top = tmp_path / "system.top"
-    master_top.write_text("; a complete hand-built topology\n")
-    widget._master_top_path = master_top
-    widget._update_master_top_mode()
-
-    coords = tmp_path / "system.gro"
-    coords.write_text("fake gro\n")
-    widget._rows[0].structure_path = coords
-
-    assert widget.is_valid() is True
-    assert widget.build_commands() == []
-
-    top_text = (project.root / "topology" / "topol.top").read_text()
-    assert top_text == "; a complete hand-built topology\n"
-    assert (project.step_dir("structure") / "mol_0.gro").read_text() == "fake gro\n"
 
 
 def test_step_structure_combines_pdb2gmx_and_itp_rows_into_one_topology(qtbot, tmp_path):
@@ -131,32 +130,23 @@ def test_step_structure_combines_pdb2gmx_and_itp_rows_into_one_topology(qtbot, t
         "[ system ]\n; Name\nSYS\n\n[ molecules ]\n; Compound #mols\nProtein_chain_A 1\n"
     )
 
-    # Row 0: pdb2gmx-recognized, two copies to exercise the name-collision
-    # rename path (both would otherwise be "Protein_chain_A").
-    row0, row1 = widget._rows[0], None
+    # Row 0/1: pdb2gmx-generated (no .itp given), two copies to exercise the
+    # name-collision rename path (both would otherwise be "Protein_chain_A").
     pdb = tmp_path / "a.pdb"
     pdb.write_text("ATOM      1  CA  ALA A   1      0.000   0.000   0.000\n")
-    row0.structure_path = pdb
-    row0._update_recognition()
-    assert row0.recognized is True
+    widget._rows[0].structure_path = pdb
 
     widget.add_row()
-    row1 = widget._rows[1]
-    row1.structure_path = pdb
-    row1._update_recognition()
-    assert row1.recognized is True
+    widget._rows[1].structure_path = pdb
 
     widget.add_row()
     row2 = widget._rows[2]
     ligand_pdb = tmp_path / "lig.pdb"
     ligand_pdb.write_text("ATOM      1  C1  LIG A   1      0.000   0.000   0.000\n")
     row2.structure_path = ligand_pdb
-    row2._update_recognition()
-    assert row2.recognized is False
     ligand_itp = tmp_path / "lig.itp"
     ligand_itp.write_text("[ moleculetype ]\nLIG   3\n\n[ atoms ]\n1 c3 1 LIG C1 1 0.0\n")
     row2.itp_path = ligand_itp
-    row2.itp_ff_combo.setCurrentIndex(0)
 
     assert widget.is_valid() is True
 

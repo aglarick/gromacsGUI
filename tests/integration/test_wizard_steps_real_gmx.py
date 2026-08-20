@@ -58,8 +58,6 @@ def test_wizard_ui_pipeline_cleanup_through_structure(qtbot, tmp_path, gmx_envir
 
     row = structure_widget._rows[0]
     row.structure_path = cleaned_pdb
-    row._update_recognition()
-    assert row.recognized is True, row.recognition_label.text()
     assert structure_widget.is_valid()
 
     structure_widget._on_run_clicked()

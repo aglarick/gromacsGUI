@@ -5,7 +5,15 @@ from gromacs_gui.main_window import MainWindow
 from gromacs_gui.ui.wizard.wizard_window import WizardWindow
 
 
-def test_open_project_flow_creates_new_project_and_swaps_to_wizard(qtbot, tmp_path, monkeypatch):
+def test_central_widget_is_always_a_wizard_window(qtbot):
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    assert isinstance(window.centralWidget(), WizardWindow)
+    assert window.centralWidget().project is None
+
+
+def test_request_project_creates_a_new_project(qtbot, tmp_path, monkeypatch):
     window = MainWindow()
     qtbot.addWidget(window)
     monkeypatch.setattr(window, "_ensure_gmx_configured", lambda: {})
@@ -15,13 +23,16 @@ def test_open_project_flow_creates_new_project_and_swaps_to_wizard(qtbot, tmp_pa
         lambda *args, **kwargs: str(project_dir),
     )
 
-    window._on_continue_to_structure_clicked()
+    result = window._request_project()
 
-    assert isinstance(window.centralWidget(), WizardWindow)
+    assert result is not None
+    project, env = result
+    assert isinstance(project, Project)
+    assert env == {}
     assert (project_dir / "project.json").is_file()
 
 
-def test_open_project_flow_reopens_existing_project(qtbot, tmp_path, monkeypatch):
+def test_request_project_reopens_an_existing_project(qtbot, tmp_path, monkeypatch):
     project_dir = tmp_path / "myproj"
     Project.create(project_dir).record_step_finished("structure", output_files=[])
 
@@ -33,14 +44,12 @@ def test_open_project_flow_reopens_existing_project(qtbot, tmp_path, monkeypatch
         lambda *args, **kwargs: str(project_dir),
     )
 
-    window._on_continue_to_structure_clicked()
+    project, _env = window._request_project()
 
-    wizard = window.centralWidget()
-    assert isinstance(wizard, WizardWindow)
-    assert wizard.project.step_record("structure").state.value == "done"
+    assert project.step_record("structure").state.value == "done"
 
 
-def test_cancelling_the_folder_picker_keeps_startup_page(qtbot, tmp_path, monkeypatch):
+def test_request_project_returns_none_when_folder_picker_is_cancelled(qtbot, monkeypatch):
     window = MainWindow()
     qtbot.addWidget(window)
     monkeypatch.setattr(window, "_ensure_gmx_configured", lambda: {})
@@ -48,6 +57,12 @@ def test_cancelling_the_folder_picker_keeps_startup_page(qtbot, tmp_path, monkey
         "gromacs_gui.main_window.QFileDialog.getExistingDirectory", lambda *a, **k: ""
     )
 
-    window._on_continue_to_structure_clicked()
+    assert window._request_project() is None
 
-    assert not isinstance(window.centralWidget(), WizardWindow)
+
+def test_request_project_returns_none_when_gmx_env_unresolved(qtbot, monkeypatch):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    monkeypatch.setattr(window, "_ensure_gmx_configured", lambda: None)
+
+    assert window._request_project() is None
