@@ -36,7 +36,7 @@ class MoleculeViewer3D(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._canvas)
 
-        self.show_message("Selecciona un archivo para previsualizar.")
+        self.show_message("Select a file to preview.")
 
     def show_message(self, text: str) -> None:
         self._axes.clear()
@@ -46,12 +46,12 @@ class MoleculeViewer3D(QWidget):
 
     def set_atoms(self, atoms: list[AtomPosition]) -> None:
         if not atoms:
-            self.show_message("Nada seleccionado para guardar.")
+            self.show_message("Nothing selected to save.")
             return
         if len(atoms) > _MAX_PREVIEW_ATOMS:
             self.show_message(
-                f"Selección demasiado grande para previsualizar ({len(atoms)} átomos).\n"
-                "Guarda el archivo y revísalo con VMD u otra herramienta externa."
+                f"Selection too large to preview ({len(atoms)} atoms).\n"
+                "Save the file and inspect it with VMD or another external tool."
             )
             return
 

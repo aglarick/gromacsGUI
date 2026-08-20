@@ -159,7 +159,7 @@ def test_save_keeps_only_checked_residues(qtbot, tmp_path):
     assert "ALA" in text
     assert "LIG" in text
     assert "HOH" not in text
-    assert "Guardado en" in widget._status_label.text()
+    assert "Saved to" in widget._status_label.text()
 
 
 def test_extract_all_molecules_mode_keeps_every_instance(qtbot, tmp_path):
@@ -271,7 +271,7 @@ def test_save_with_nothing_checked_refuses_to_write(qtbot, tmp_path):
     widget._save_to(output)
 
     assert not output.exists()
-    assert "Selecciona al menos" in widget._status_label.text()
+    assert "Select at least" in widget._status_label.text()
 
 
 def test_preview_reflects_default_selection_on_load(qtbot, tmp_path):
@@ -356,3 +356,21 @@ def test_does_not_gate_or_record_project_step_state(qtbot, tmp_path):
 
     for step_name in STEP_ORDER:
         assert project.step_record(step_name).state == StepState.PENDING
+
+
+def test_works_without_a_project(qtbot, tmp_path):
+    """The tool is usable before a project folder exists at all (e.g. on
+    the app's startup screen) - defaults the save location to the input
+    file's own folder instead of a project's cleanup/ dir.
+    """
+    widget = CleanupToolWidget(None, {})
+    qtbot.addWidget(widget)
+    pdb = tmp_path / "system.pdb"
+    pdb.write_text(PDB_WITH_HETATM)
+    widget._set_input_path(pdb)
+
+    output = tmp_path / "system_cleaned.pdb"
+    widget._save_to(output)
+
+    assert output.is_file()
+    assert "Saved to" in widget._status_label.text()

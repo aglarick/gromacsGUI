@@ -16,7 +16,7 @@ from gromacs_gui.ui.wizard.step_base import StepBase, StepCommand
 class StepSolvateWidget(StepBase):
     step_name = "solvate"
 
-    DESCRIPTION = "Llena la caja con moléculas de solvente (agua u otro) alrededor de tu molécula."
+    DESCRIPTION = "Fills the box with solvent molecules (water or otherwise) around your molecule."
 
     def __init__(
         self, project: Project, gmx_env: dict[str, str], parent: QWidget | None = None

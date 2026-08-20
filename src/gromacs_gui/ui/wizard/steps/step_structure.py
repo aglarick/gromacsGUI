@@ -4,259 +4,160 @@ import shutil
 from pathlib import Path
 
 from PySide6.QtWidgets import (
-    QButtonGroup,
     QComboBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QRadioButton,
     QVBoxLayout,
     QWidget,
 )
 
-from gromacs_gui.core import conventions
 from gromacs_gui.core.project import Project
 from gromacs_gui.gmx.commands.pdb2gmx import build_pdb2gmx_command
-from gromacs_gui.gmx.forcefields import gmxdata_top_dir, list_force_fields, list_water_models
-from gromacs_gui.gmx.topology import build_wrapping_topology, parse_moleculetype_name
+from gromacs_gui.gmx.forcefields import (
+    gmxdata_top_dir,
+    list_force_fields,
+    list_recognized_residues,
+    list_water_models,
+)
+from gromacs_gui.gmx.structure_files import list_residues
+from gromacs_gui.gmx.topology import (
+    build_combined_topology,
+    extract_generated_topology_chunk,
+    parse_moleculetype_name,
+    parse_moleculetype_name_from_text,
+    rename_moleculetype,
+    rename_posre_include,
+)
 from gromacs_gui.ui.wizard.step_base import StepBase, StepCommand
 
-_WATER_MODEL_HELP_TEXT = (
-    "El modelo de agua elegido aquí queda registrado en la topología, y el "
-    "paso de solvatación usará por defecto una caja de agua compatible con él."
-)
-
-_SERVER_INFO_TEXT = (
-    "Próximamente: esto abrirá una página para poner en cola la generación del "
-    "campo de fuerza de tu molécula en un servidor dedicado, a partir de un "
-    ".gro o .pdb ya limpio. Todavía no está disponible."
-)
-
-# Herramientas como LigParGen o ATB suelen generar su propia carpeta de campo
-# de fuerza (p. ej. oplsaam.ff), distinta de los campos de fuerza que trae
-# GROMACS de fábrica — seleccionar uno de los de fábrica no necesariamente
-# es compatible con esos parámetros.
+# Tools like LigParGen or ATB often generate their own force field folder
+# (e.g. oplsaam.ff), distinct from GROMACS's bundled ones - picking a
+# bundled one isn't necessarily compatible with those parameters.
 _CUSTOM_FF_SENTINEL = "__custom_ff__"
+_NO_WATER_SENTINEL = "none"
+
+_STEP_DESCRIPTION = (
+    "Gather the structure and topology for every molecule your system needs "
+    "and combine them into one topology. Add one row per molecule (protein, "
+    "ligand, cofactor, ...). For each, load a coordinate file: if the force "
+    "field chosen below recognizes all of its residues, it's generated "
+    "automatically with pdb2gmx; otherwise, provide its .itp (e.g. from ATB "
+    "or LigParGen). This step only checks that the pieces fit together — it "
+    "doesn't build the actual simulation box yet (that's Box, step 2) or "
+    "verify the force fields truly work together (a later step). If your "
+    "structure carries crystallographic water or other molecules you don't "
+    "want, clean it first in the 'Cleanup' step."
+)
+
+_MASTER_TOP_DESCRIPTION = (
+    "If you already have a complete .top covering every molecule in your "
+    "system, you can provide it here instead of generating one. When set, "
+    "it's used as-is and the force field/water model/per-row topology "
+    "options below are ignored - each row then only needs a coordinate file."
+)
 
 
-class StepStructureWidget(StepBase):
-    step_name = "structure"
+class _MoleculeRow(QWidget):
+    """One molecule: its coordinate file, and (unless a master .top makes
+    this moot) how to get its topology - generated with pdb2gmx if the
+    step's chosen force field recognizes every residue in the file,
+    otherwise a user-supplied .itp.
+    """
 
-    DESCRIPTION = (
-        "Prepara la molécula que vas a simular: a partir de un archivo de "
-        "coordenadas, obtienes un .gro y una topología (los parámetros de "
-        "campo de fuerza) listos para el resto del flujo. Si ya tienes ambos "
-        "—por ejemplo, de ATB o LigParGen— puedes saltarte la generación e "
-        "indicar directamente dónde están tus archivos. Si tu estructura trae "
-        "aguas cristalográficas u otras moléculas que no quieres incluir, "
-        "límpiala primero en el paso 'Limpieza'."
-    )
+    def __init__(self, step: StepStructureWidget, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.step = step
+        self.structure_path: Path | None = None
+        self.itp_path: Path | None = None
+        self.custom_ff_path: Path | None = None
+        self.recognized = False
 
-    def __init__(
-        self, project: Project, gmx_env: dict[str, str], parent: QWidget | None = None
-    ) -> None:
-        super().__init__(project, gmx_env, parent)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 4, 0, 4)
 
-        self._input_path: Path | None = None
-        self._own_coords_path: Path | None = None
-        self._own_topology_path: Path | None = None
+        form = QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        outer.addLayout(form)
 
-        self._build_mode_selector()
-        self._build_generate_section()
-        self._build_bring_own_section()
-        self._build_server_section()
+        self.structure_label = QLabel("No file selected")
+        structure_button = QPushButton("Browse…")
+        structure_button.clicked.connect(self._on_browse_structure_clicked)
+        structure_row = QHBoxLayout()
+        structure_row.addWidget(self.structure_label, 1)
+        structure_row.addWidget(structure_button)
+        remove_button = QPushButton("Remove")
+        remove_button.clicked.connect(self._on_remove_clicked)
+        structure_row.addWidget(remove_button)
+        form.addRow("Coordinate file (.gro/.pdb):", structure_row)
 
-        self._populate_force_field_combo(self.force_field_combo)
-        self.force_field_combo.currentIndexChanged.connect(self._populate_water_models)
-        self._populate_water_models()
-        self._populate_force_field_combo(self._own_topology_ff_combo)
-        self._own_topology_ff_combo.addItem(
-            "Otra carpeta de campo de fuerza (.ff)…", userData=_CUSTOM_FF_SENTINEL
-        )
-        self._own_topology_ff_combo.currentIndexChanged.connect(
-            self._update_custom_ff_row_visibility
-        )
+        self.recognition_label = QLabel("")
+        self.recognition_label.setWordWrap(True)
+        form.addRow(self.recognition_label)
+
+        self.itp_label = QLabel("No file selected")
+        itp_button = QPushButton("Browse…")
+        itp_button.clicked.connect(self._on_browse_itp_clicked)
+        itp_row = QHBoxLayout()
+        itp_row.addWidget(self.itp_label, 1)
+        itp_row.addWidget(itp_button)
+        self.itp_field_label = QLabel("Topology (.itp, optional if you gave a master .top):")
+        form.addRow(self.itp_field_label, itp_row)
+
+        self.itp_ff_combo = QComboBox()
+        self.itp_ff_combo.currentIndexChanged.connect(self._update_custom_ff_row_visibility)
+        self.itp_ff_label = QLabel("Force field for this .itp:")
+        form.addRow(self.itp_ff_label, self.itp_ff_combo)
+
+        self.custom_ff_label = QLabel("No folder selected")
+        custom_ff_button = QPushButton("Browse…")
+        custom_ff_button.clicked.connect(self._on_browse_custom_ff_clicked)
+        custom_ff_row = QHBoxLayout()
+        custom_ff_row.addWidget(self.custom_ff_label, 1)
+        custom_ff_row.addWidget(custom_ff_button)
+        self.custom_ff_field_label = QLabel("Custom .ff folder:")
+        form.addRow(self.custom_ff_field_label, custom_ff_row)
+
+        self._populate_itp_ff_combo()
+        self.set_master_top_mode(False)
+
+    def _populate_itp_ff_combo(self) -> None:
+        self.itp_ff_combo.clear()
+        top_dir = gmxdata_top_dir(self.step.gmx_env)
+        if top_dir is not None:
+            for ff in list_force_fields(top_dir):
+                self.itp_ff_combo.addItem(f"{ff.name} — {ff.description}", userData=ff.name)
+        self.itp_ff_combo.addItem("Other custom .ff folder…", userData=_CUSTOM_FF_SENTINEL)
         self._update_custom_ff_row_visibility()
-
-        for radio in (self._generate_radio, self._bring_own_radio, self._server_radio):
-            radio.toggled.connect(self._update_mode_visibility)
-        self._update_mode_visibility()
-
-    # --- construction ---
-    def _build_mode_selector(self) -> None:
-        self._generate_radio = QRadioButton(
-            "Generar topología con pdb2gmx (solo para proteínas, ácidos "
-            "nucleicos u otras moléculas que el campo de fuerza ya reconoce — "
-            "no es un generador general de campos de fuerza)"
-        )
-        self._bring_own_radio = QRadioButton(
-            "Ya tengo estructura y topología (de ATB, LigParGen, u otra fuente)"
-        )
-        self._server_radio = QRadioButton("Generar campo de fuerza en el servidor (próximamente)")
-        self._generate_radio.setChecked(True)
-        mode_group = QButtonGroup(self)
-        for radio in (self._generate_radio, self._bring_own_radio, self._server_radio):
-            mode_group.addButton(radio)
-
-        mode_box = QWidget(self)
-        mode_layout = QVBoxLayout(mode_box)
-        mode_layout.setContentsMargins(0, 0, 0, 0)
-        mode_layout.addWidget(QLabel("¿Qué tienes?"))
-        mode_layout.addWidget(self._generate_radio)
-        mode_layout.addWidget(self._bring_own_radio)
-        mode_layout.addWidget(self._server_radio)
-        self.form_layout.addRow(mode_box)
-
-    def _build_generate_section(self) -> None:
-        self._generate_container = QWidget(self)
-        generate_form = self._new_subform(self._generate_container)
-
-        self._input_label = QLabel("No file selected")
-        browse_button = QPushButton("Browse…")
-        browse_button.clicked.connect(self._on_browse_structure_clicked)
-        picker_row = QHBoxLayout()
-        picker_row.addWidget(self._input_label, 1)
-        picker_row.addWidget(browse_button)
-        generate_form.addRow("Structure file (.pdb or .gro):", picker_row)
-
-        self.force_field_combo = QComboBox()
-        self.water_model_combo = QComboBox()
-        generate_form.addRow("Force field:", self.force_field_combo)
-        generate_form.addRow("Water model:", self.water_model_combo)
-        water_help_label = QLabel(_WATER_MODEL_HELP_TEXT)
-        water_help_label.setWordWrap(True)
-        generate_form.addRow(water_help_label)
-
-        self.form_layout.addRow(self._generate_container)
-
-    def _build_bring_own_section(self) -> None:
-        self._bring_own_container = QWidget(self)
-        bring_own_form = self._new_subform(self._bring_own_container)
-
-        self._own_coords_label = QLabel("No file selected")
-        own_coords_button = QPushButton("Browse…")
-        own_coords_button.clicked.connect(self._on_browse_own_coords_clicked)
-        own_coords_row = QHBoxLayout()
-        own_coords_row.addWidget(self._own_coords_label, 1)
-        own_coords_row.addWidget(own_coords_button)
-        bring_own_form.addRow("Coordinate file (.gro or .pdb):", own_coords_row)
-
-        self._own_topology_label = QLabel("No file selected")
-        own_topology_button = QPushButton("Browse…")
-        own_topology_button.clicked.connect(self._on_browse_own_topology_clicked)
-        own_topology_row = QHBoxLayout()
-        own_topology_row.addWidget(self._own_topology_label, 1)
-        own_topology_row.addWidget(own_topology_button)
-        bring_own_form.addRow("Topology file (.top or .itp):", own_topology_row)
-
-        self._own_topology_ff_combo = QComboBox()
-        bring_own_form.addRow("Force field (solo si es .itp):", self._own_topology_ff_combo)
-
-        self._own_custom_ff_path: Path | None = None
-        self._own_custom_ff_label = QLabel("No folder selected")
-        own_custom_ff_button = QPushButton("Browse…")
-        own_custom_ff_button.clicked.connect(self._on_browse_custom_ff_clicked)
-        own_custom_ff_row = QHBoxLayout()
-        own_custom_ff_row.addWidget(self._own_custom_ff_label, 1)
-        own_custom_ff_row.addWidget(own_custom_ff_button)
-        self._own_custom_ff_container = QWidget()
-        self._own_custom_ff_container.setLayout(own_custom_ff_row)
-        bring_own_form.addRow("Carpeta .ff personalizada:", self._own_custom_ff_container)
-
-        itp_help_label = QLabel(
-            "Si eliges un .itp, construimos el .top que lo envuelve incluyendo "
-            "el campo de fuerza que elijas aquí. Si tu generador (LigParGen, "
-            "ATB, u otro) trae su propia carpeta de campo de fuerza en vez de "
-            "usar una de las que trae GROMACS, elige 'Otra carpeta de campo de "
-            "fuerza (.ff)…' y selecciónala — no asumas que un campo de fuerza "
-            "de la lista es compatible con parámetros generados externamente. "
-            "Si ya tienes un .top completo, nada de esto se usa."
-        )
-        itp_help_label.setWordWrap(True)
-        bring_own_form.addRow(itp_help_label)
-
-        self.form_layout.addRow(self._bring_own_container)
-
-    def _build_server_section(self) -> None:
-        self._server_container = QWidget(self)
-        server_layout = QVBoxLayout(self._server_container)
-        server_layout.setContentsMargins(0, 0, 0, 0)
-        info_label = QLabel(_SERVER_INFO_TEXT)
-        info_label.setWordWrap(True)
-        server_layout.addWidget(info_label)
-        self.form_layout.addRow(self._server_container)
-
-    @staticmethod
-    def _new_subform(container: QWidget) -> QFormLayout:
-        layout = QFormLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        return layout
-
-    # --- mode switching ---
-    def _update_mode_visibility(self) -> None:
-        generate_mode = self._generate_radio.isChecked()
-        bring_own_mode = self._bring_own_radio.isChecked()
-        server_mode = self._server_radio.isChecked()
-
-        self._generate_container.setVisible(generate_mode)
-        self._bring_own_container.setVisible(bring_own_mode)
-        self._server_container.setVisible(server_mode)
-        self.run_button.setEnabled(not server_mode)
-
-    # --- generate-mode fields ---
-    def _populate_force_field_combo(self, combo: QComboBox) -> None:
-        top_dir = gmxdata_top_dir(self.gmx_env)
-        if top_dir is None:
-            return
-        for ff in list_force_fields(top_dir):
-            combo.addItem(f"{ff.name} — {ff.description}", userData=ff.name)
-
-    def _populate_water_models(self) -> None:
-        self.water_model_combo.clear()
-        top_dir = gmxdata_top_dir(self.gmx_env)
-        force_field = self.force_field_combo.currentData()
-        if top_dir is None or not force_field:
-            return
-        for model in list_water_models(top_dir, force_field):
-            label = f"{model.name} — {model.description}"
-            self.water_model_combo.addItem(label, userData=model.name)
 
     def _on_browse_structure_clicked(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select a structure file", str(Path.home()), "Structure files (*.pdb *.gro)"
+            self, "Select a coordinate file", str(Path.home()), "Structure files (*.pdb *.gro)"
         )
         if not path:
             return
-        self._set_structure_path(Path(path))
+        self.structure_path = Path(path)
+        self.structure_label.setText(self.structure_path.name)
+        self._update_recognition()
 
-    def _set_structure_path(self, path: Path) -> None:
-        self._input_path = path
-        self._input_label.setText(path.name)
+    def _on_remove_clicked(self) -> None:
+        self.step.remove_row(self)
 
-    # --- bring-your-own-mode fields ---
-    def _on_browse_own_coords_clicked(self) -> None:
+    def _on_browse_itp_clicked(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select a coordinate file", str(Path.home()), "Coordinate files (*.gro *.pdb)"
+            self, "Select a topology fragment", str(Path.home()), "Topology files (*.itp)"
         )
         if not path:
             return
-        self._own_coords_path = Path(path)
-        self._own_coords_label.setText(self._own_coords_path.name)
-
-    def _on_browse_own_topology_clicked(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Select a topology file", str(Path.home()), "Topology files (*.top *.itp)"
-        )
-        if not path:
-            return
-        self._own_topology_path = Path(path)
-        self._own_topology_label.setText(self._own_topology_path.name)
+        self.itp_path = Path(path)
+        self.itp_label.setText(self.itp_path.name)
 
     def _update_custom_ff_row_visibility(self) -> None:
-        is_custom = self._own_topology_ff_combo.currentData() == _CUSTOM_FF_SENTINEL
-        self._own_custom_ff_container.setVisible(is_custom)
+        is_custom = self.itp_ff_combo.currentData() == _CUSTOM_FF_SENTINEL
+        self.custom_ff_field_label.setVisible(is_custom)
+        self.custom_ff_label.setVisible(is_custom)
 
     def _on_browse_custom_ff_clicked(self) -> None:
         folder = QFileDialog.getExistingDirectory(
@@ -264,123 +165,342 @@ class StepStructureWidget(StepBase):
         )
         if not folder:
             return
-        self._own_custom_ff_path = Path(folder)
-        self._own_custom_ff_label.setText(self._own_custom_ff_path.name)
+        self.custom_ff_path = Path(folder)
+        self.custom_ff_label.setText(self.custom_ff_path.name)
 
-    # --- StepBase overrides ---
-    def is_valid(self) -> bool:
-        if self._generate_radio.isChecked():
-            return (
-                self._input_path is not None
-                and self._input_path.is_file()
-                and self.force_field_combo.currentData() is not None
-                and self.water_model_combo.currentData() is not None
-            )
-        if self._bring_own_radio.isChecked():
-            topology_ready = (
-                self._own_topology_path is not None
-                and self._own_topology_path.is_file()
-                and (
-                    self._own_topology_path.suffix.lower() != ".itp"
-                    or self._itp_force_field_ready()
-                )
-            )
-            return (
-                self._own_coords_path is not None
-                and self._own_coords_path.is_file()
-                and topology_ready
-            )
-        return False  # server mode: not available yet
+    def set_master_top_mode(self, enabled: bool) -> None:
+        self.recognition_label.setVisible(not enabled)
+        self.itp_field_label.setVisible(not enabled)
+        self.itp_label.setVisible(not enabled)
+        visible_and_custom = (not enabled) and self.itp_ff_combo.currentData() == (
+            _CUSTOM_FF_SENTINEL
+        )
+        self.itp_ff_label.setVisible(not enabled)
+        self.itp_ff_combo.setVisible(not enabled)
+        self.custom_ff_field_label.setVisible(visible_and_custom)
+        self.custom_ff_label.setVisible(visible_and_custom)
+        if not enabled:
+            self._update_recognition()
 
-    def _itp_force_field_ready(self) -> bool:
-        data = self._own_topology_ff_combo.currentData()
+    def _update_recognition(self) -> None:
+        if self.structure_path is None:
+            self.recognized = False
+            self.recognition_label.setText("")
+            return
+        residue_names = set(list_residues(self.structure_path))
+        recognized_db = self.step.recognized_residues()
+        self.recognized = bool(residue_names) and residue_names <= recognized_db
+        if self.recognized:
+            self.recognition_label.setText(
+                f"✓ Recognized by {self.step.chosen_force_field()} — will generate with pdb2gmx."
+            )
+        else:
+            self.recognition_label.setText(
+                "Not recognized by the chosen force field — provide its topology (.itp) below."
+            )
+
+    def is_valid(self, master_top_mode: bool) -> bool:
+        if self.structure_path is None or not self.structure_path.is_file():
+            return False
+        if master_top_mode:
+            return True
+        if self.recognized:
+            return True
+        return self.itp_path is not None and self.itp_path.is_file() and self._itp_ff_ready()
+
+    def _itp_ff_ready(self) -> bool:
+        data = self.itp_ff_combo.currentData()
         if data is None:
             return False
         if data == _CUSTOM_FF_SENTINEL:
             return (
-                self._own_custom_ff_path is not None
-                and (self._own_custom_ff_path / "forcefield.itp").is_file()
+                self.custom_ff_path is not None
+                and (self.custom_ff_path / "forcefield.itp").is_file()
             )
         return True
 
-    def build_commands(self) -> list[StepCommand]:
-        if self._generate_radio.isChecked():
-            return self._build_generate_commands()
-        self._stage_own_files()
-        return []
-
-    def _build_generate_commands(self) -> list[StepCommand]:
-        assert self._input_path is not None
-        structure_dir = self.project.step_dir(self.step_name)
-
-        force_field = self.force_field_combo.currentData()
-        water_model = self.water_model_combo.currentData()
-        self.project.manifest.force_field = force_field
-        self.project.manifest.water_model = water_model
-
-        topology_dir = self.project.root / "topology"
-        args = build_pdb2gmx_command(
-            self._input_path,
-            structure_dir / conventions.STRUCTURE_GRO,
-            topology_dir / conventions.TOPOLOGY_TOP,
-            topology_dir / conventions.POSRE_ITP,
-            force_field,
-            water_model,
-        )
-        return [StepCommand(args=args)]
-
-    def _stage_own_files(self) -> None:
-        assert self._own_coords_path is not None
-        assert self._own_topology_path is not None
-        structure_dir = self.project.step_dir(self.step_name)
-        topology_dir = self.project.root / "topology"
-
-        coords_dest = structure_dir / f"processed{self._own_coords_path.suffix.lower()}"
-        shutil.copyfile(self._own_coords_path, coords_dest)
-
-        topology_dest = topology_dir / conventions.TOPOLOGY_TOP
-        if self._own_topology_path.suffix.lower() == ".itp":
-            force_field = self._resolve_itp_force_field(topology_dir)
-            itp_dest = topology_dir / self._own_topology_path.name
-            shutil.copyfile(self._own_topology_path, itp_dest)
-            molecule_name = parse_moleculetype_name(itp_dest)
-            topology_dest.write_text(
-                build_wrapping_topology(itp_dest.name, force_field, molecule_name)
-            )
-        else:
-            shutil.copyfile(self._own_topology_path, topology_dest)
-
-    def _resolve_itp_force_field(self, topology_dir: Path) -> str:
-        """Return the bare force field name to `#include` for the .itp, copying
-        a user-supplied custom .ff folder into the project first if that's
-        what was chosen (rather than assuming a GROMACS-bundled one applies).
+    def resolved_ff_name(self) -> str:
+        """Bare force field name (no .ff suffix) to #include for this row's
+        .itp, copying a custom folder into the project first if needed.
         """
-        data = self._own_topology_ff_combo.currentData()
+        data = self.itp_ff_combo.currentData()
         if data != _CUSTOM_FF_SENTINEL:
             return data
 
-        assert self._own_custom_ff_path is not None
-        dest_name = self._own_custom_ff_path.name
+        assert self.custom_ff_path is not None
+        topology_dir = self.step.project.root / "topology"
+        dest_name = self.custom_ff_path.name
         if not dest_name.endswith(".ff"):
             dest_name += ".ff"
         dest_dir = topology_dir / dest_name
         if not dest_dir.exists():
-            shutil.copytree(self._own_custom_ff_path, dest_dir)
+            shutil.copytree(self.custom_ff_path, dest_dir)
         return dest_name.removesuffix(".ff")
+
+
+class StepStructureWidget(StepBase):
+    step_name = "structure"
+
+    DESCRIPTION = _STEP_DESCRIPTION
+
+    def __init__(
+        self, project: Project, gmx_env: dict[str, str], parent: QWidget | None = None
+    ) -> None:
+        super().__init__(project, gmx_env, parent)
+
+        self._rows: list[_MoleculeRow] = []
+        self._recognized_residues_cache: dict[str, set[str]] = {}
+
+        self.force_field_combo = QComboBox()
+        self._populate_force_field_combo()
+        self.force_field_combo.currentIndexChanged.connect(self._on_force_field_changed)
+        self.form_layout.addRow("Force field:", self.force_field_combo)
+
+        self.water_model_combo = QComboBox()
+        self._populate_water_models()
+        self.form_layout.addRow("Water model:", self.water_model_combo)
+
+        master_top_label = QLabel(_MASTER_TOP_DESCRIPTION)
+        master_top_label.setWordWrap(True)
+        self.form_layout.addRow(master_top_label)
+
+        self._master_top_path: Path | None = None
+        self.master_top_label = QLabel("No file selected")
+        master_top_button = QPushButton("Browse…")
+        master_top_button.clicked.connect(self._on_browse_master_top_clicked)
+        clear_master_top_button = QPushButton("Clear")
+        clear_master_top_button.clicked.connect(self._on_clear_master_top_clicked)
+        master_top_row = QHBoxLayout()
+        master_top_row.addWidget(self.master_top_label, 1)
+        master_top_row.addWidget(master_top_button)
+        master_top_row.addWidget(clear_master_top_button)
+        self.form_layout.addRow("Master .top (optional):", master_top_row)
+
+        add_row_button = QPushButton("Add molecule")
+        add_row_button.clicked.connect(self.add_row)
+        self.form_layout.addRow(add_row_button)
+
+        self._rows_layout = QVBoxLayout()
+        self.form_layout.addRow(self._rows_layout)
+
+        self.add_row()
+
+    # --- force field / water model ---
+    def _populate_force_field_combo(self) -> None:
+        top_dir = gmxdata_top_dir(self.gmx_env)
+        if top_dir is None:
+            return
+        for ff in list_force_fields(top_dir):
+            self.force_field_combo.addItem(f"{ff.name} — {ff.description}", userData=ff.name)
+
+    def _populate_water_models(self) -> None:
+        self.water_model_combo.clear()
+        self.water_model_combo.addItem("None (no water)", userData=_NO_WATER_SENTINEL)
+        top_dir = gmxdata_top_dir(self.gmx_env)
+        force_field = self.force_field_combo.currentData()
+        if top_dir is None or not force_field:
+            return
+        for model in list_water_models(top_dir, force_field):
+            self.water_model_combo.addItem(
+                f"{model.name} — {model.description}", userData=model.name
+            )
+
+    def _on_force_field_changed(self) -> None:
+        self._populate_water_models()
+        for row in self._rows:
+            row._update_recognition()
+
+    def chosen_force_field(self) -> str | None:
+        return self.force_field_combo.currentData()
+
+    def recognized_residues(self) -> set[str]:
+        ff = self.chosen_force_field()
+        if not ff:
+            return set()
+        if ff not in self._recognized_residues_cache:
+            top_dir = gmxdata_top_dir(self.gmx_env)
+            self._recognized_residues_cache[ff] = (
+                list_recognized_residues(top_dir, ff) if top_dir is not None else set()
+            )
+        return self._recognized_residues_cache[ff]
+
+    # --- master .top ---
+    def _on_browse_master_top_clicked(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select a complete topology", str(Path.home()), "Topology files (*.top)"
+        )
+        if not path:
+            return
+        self._master_top_path = Path(path)
+        self.master_top_label.setText(self._master_top_path.name)
+        self._update_master_top_mode()
+
+    def _on_clear_master_top_clicked(self) -> None:
+        self._master_top_path = None
+        self.master_top_label.setText("No file selected")
+        self._update_master_top_mode()
+
+    def _update_master_top_mode(self) -> None:
+        enabled = self._master_top_path is not None
+        self.force_field_combo.setEnabled(not enabled)
+        self.water_model_combo.setEnabled(not enabled)
+        for row in self._rows:
+            row.set_master_top_mode(enabled)
+
+    # --- rows ---
+    def add_row(self) -> None:
+        row = _MoleculeRow(self, self)
+        row.set_master_top_mode(self._master_top_path is not None)
+        self._rows.append(row)
+        self._rows_layout.addWidget(row)
+
+    def remove_row(self, row: _MoleculeRow) -> None:
+        if len(self._rows) <= 1:
+            return  # always keep at least one row
+        self._rows.remove(row)
+        self._rows_layout.removeWidget(row)
+        row.deleteLater()
+
+    # --- StepBase overrides ---
+    def is_valid(self) -> bool:
+        master_top_mode = self._master_top_path is not None
+        if master_top_mode and not self._master_top_path.is_file():
+            return False
+        if not self._rows:
+            return False
+        if not master_top_mode and not self.chosen_force_field():
+            return False
+        return all(row.is_valid(master_top_mode) for row in self._rows)
+
+    def build_commands(self) -> list[StepCommand]:
+        if self._master_top_path is not None:
+            self._stage_master_top()
+            return []
+
+        commands: list[StepCommand] = []
+        self._pdb2gmx_row_indices: list[int] = []
+        for i, row in enumerate(self._rows):
+            if row.recognized:
+                commands.append(self._build_pdb2gmx_command(i, row))
+                self._pdb2gmx_row_indices.append(i)
+        return commands
+
+    def _build_pdb2gmx_command(self, index: int, row: _MoleculeRow) -> StepCommand:
+        assert row.structure_path is not None
+        mol_dir = self.project.step_dir(self.step_name) / f"mol_{index}"
+        mol_dir.mkdir(parents=True, exist_ok=True)
+
+        force_field = self.chosen_force_field()
+        water_model = self.water_model_combo.currentData()
+        self.project.manifest.force_field = force_field
+        self.project.manifest.water_model = (
+            None if water_model == _NO_WATER_SENTINEL else (water_model)
+        )
+
+        args = build_pdb2gmx_command(
+            row.structure_path,
+            mol_dir / "processed.gro",
+            mol_dir / "topol.top",
+            mol_dir / "posre.itp",
+            force_field,
+            water_model,
+        )
+        return StepCommand(args=args)
+
+    def on_all_commands_finished(self) -> None:
+        if self._master_top_path is not None:
+            return
+        self._combine_topologies()
+
+    def _combine_topologies(self) -> None:
+        topology_dir = self.project.root / "topology"
+        topology_dir.mkdir(parents=True, exist_ok=True)
+        force_field_includes: dict[str, str] = {}
+        molecule_chunks: list[str] = []
+        molecules: list[tuple[str, int]] = []
+        used_names: set[str] = set()
+
+        chosen_ff = self.chosen_force_field()
+        if chosen_ff:
+            force_field_includes[chosen_ff] = f'#include "{chosen_ff}.ff/forcefield.itp"\n'
+
+        first_pdb2gmx_seen = False
+        for i, row in enumerate(self._rows):
+            assert row.structure_path is not None
+            structure_dir = self.project.step_dir(self.step_name)
+
+            if row.recognized:
+                mol_dir = structure_dir / f"mol_{i}"
+                gro_dest = structure_dir / f"mol_{i}.gro"
+                shutil.copyfile(mol_dir / "processed.gro", gro_dest)
+
+                chunk = extract_generated_topology_chunk(
+                    mol_dir / "topol.top", include_water_and_ions=not first_pdb2gmx_seen
+                )
+                first_pdb2gmx_seen = True
+
+                posre_dest_name = f"posre_mol{i}.itp"
+                shutil.copyfile(mol_dir / "posre.itp", topology_dir / posre_dest_name)
+                chunk = rename_posre_include(chunk, "posre.itp", posre_dest_name)
+
+                original_name = parse_moleculetype_name_from_text(chunk)
+                name = self._unique_name(original_name, used_names)
+                if name != original_name:
+                    chunk = rename_moleculetype(chunk, name)
+            else:
+                gro_dest = structure_dir / f"mol_{i}{row.structure_path.suffix.lower()}"
+                shutil.copyfile(row.structure_path, gro_dest)
+
+                assert row.itp_path is not None
+                ff_name = row.resolved_ff_name()
+                force_field_includes.setdefault(
+                    ff_name, f'#include "{ff_name}.ff/forcefield.itp"\n'
+                )
+                itp_dest = topology_dir / row.itp_path.name
+                shutil.copyfile(row.itp_path, itp_dest)
+                name = self._unique_name(parse_moleculetype_name(itp_dest), used_names)
+                chunk = f'#include "{itp_dest.name}"\n'
+
+            used_names.add(name)
+            molecule_chunks.append(chunk)
+            molecules.append((name, 1))
+
+        combined = build_combined_topology(
+            force_field_includes=list(force_field_includes.values()),
+            molecule_chunks=molecule_chunks,
+            molecules=molecules,
+        )
+        (topology_dir / "topol.top").write_text(combined)
+
+    @staticmethod
+    def _unique_name(name: str, used_names: set[str]) -> str:
+        if name not in used_names:
+            return name
+        suffix = 2
+        while f"{name}_{suffix}" in used_names:
+            suffix += 1
+        return f"{name}_{suffix}"
+
+    def _stage_master_top(self) -> None:
+        assert self._master_top_path is not None
+        topology_dir = self.project.root / "topology"
+        topology_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(self._master_top_path, topology_dir / "topol.top")
+
+        structure_dir = self.project.step_dir(self.step_name)
+        for i, row in enumerate(self._rows):
+            assert row.structure_path is not None
+            dest = structure_dir / f"mol_{i}{row.structure_path.suffix.lower()}"
+            shutil.copyfile(row.structure_path, dest)
 
     def output_files(self) -> list[str]:
         root = self.project.root
         structure_dir = self.project.step_dir(self.step_name)
-        topology_dir = root / "topology"
-
-        if self._generate_radio.isChecked():
-            return [
-                str((structure_dir / conventions.STRUCTURE_GRO).relative_to(root)),
-                str((topology_dir / conventions.TOPOLOGY_TOP).relative_to(root)),
-                str((topology_dir / conventions.POSRE_ITP).relative_to(root)),
-            ]
-
-        assert self._own_coords_path is not None
-        coords_dest = structure_dir / f"processed{self._own_coords_path.suffix.lower()}"
-        topology_dest = topology_dir / conventions.TOPOLOGY_TOP
-        return [str(coords_dest.relative_to(root)), str(topology_dest.relative_to(root))]
+        files = [str((root / "topology" / "topol.top").relative_to(root))]
+        for i, row in enumerate(self._rows):
+            assert row.structure_path is not None
+            suffix = "gro" if row.recognized else row.structure_path.suffix.lower().lstrip(".")
+            path = structure_dir / f"mol_{i}.{suffix}"
+            if path.is_file():
+                files.append(str(path.relative_to(root)))
+        return files

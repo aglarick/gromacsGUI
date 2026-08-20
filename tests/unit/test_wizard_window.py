@@ -15,7 +15,7 @@ def test_cleanup_row_is_always_enabled(qtbot, tmp_path):
     wizard = WizardWindow(project, gmx_env={})
     qtbot.addWidget(wizard)
 
-    assert _is_enabled(wizard._sidebar, 0)  # 0. Limpieza — never gated
+    assert _is_enabled(wizard._sidebar, 0)  # 0. Cleanup — never gated
 
 
 def test_only_first_pipeline_row_enabled_for_a_fresh_project(qtbot, tmp_path):

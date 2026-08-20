@@ -16,10 +16,10 @@ class StepBoxWidget(StepBase):
     step_name = "box"
 
     DESCRIPTION = (
-        "Define la caja de simulación alrededor de tu molécula: su forma, y "
-        "qué tan lejos deben quedar los átomos del borde (para que la "
-        "molécula no interactúe consigo misma a través de las condiciones "
-        "periódicas de frontera)."
+        "Defines the simulation box around your molecule: its shape, and "
+        "how far the atoms should stay from the edge (so the molecule "
+        "doesn't interact with itself across the periodic boundary "
+        "conditions)."
     )
 
     def __init__(

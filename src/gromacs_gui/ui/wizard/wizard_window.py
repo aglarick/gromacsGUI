@@ -21,7 +21,7 @@ from gromacs_gui.ui.wizard.steps.step_ions import StepIonsWidget
 from gromacs_gui.ui.wizard.steps.step_solvate import StepSolvateWidget
 from gromacs_gui.ui.wizard.steps.step_structure import StepStructureWidget
 
-_CLEANUP_ROW_LABEL = "0. Limpieza"
+_CLEANUP_ROW_LABEL = "0. Cleanup"
 
 _STEP_LABELS = {
     "structure": "1. Structure",
@@ -96,7 +96,11 @@ class WizardWindow(QWidget):
     """
 
     def __init__(
-        self, project: Project, gmx_env: dict[str, str], parent: QWidget | None = None
+        self,
+        project: Project,
+        gmx_env: dict[str, str],
+        parent: QWidget | None = None,
+        initial_row: int = 0,
     ) -> None:
         super().__init__(parent)
         self.project = project
@@ -132,7 +136,7 @@ class WizardWindow(QWidget):
 
         self.project.state_changed.connect(self.refresh)
         self.refresh()
-        self._sidebar.setCurrentRow(0)
+        self._sidebar.setCurrentRow(initial_row)
 
     def refresh(self) -> None:
         for offset, step_name in enumerate(STEP_ORDER):

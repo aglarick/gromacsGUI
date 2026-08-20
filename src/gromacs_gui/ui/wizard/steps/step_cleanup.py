@@ -48,29 +48,27 @@ def _create_viewer(parent: QWidget) -> QWidget:
 
 
 _DESCRIPTION = (
-    "Herramienta de limpieza: carga cualquier archivo de estructura o caja "
-    "(.pdb o .gro), revisa qué tipos de moléculas contiene, y marca las que "
-    "quieres CONSERVAR — el resto se descarta. Por defecto, todo queda "
-    "marcado salvo las moléculas HETATM (agua cristalográfica, iones, "
-    "ligandos u otros residuos que no forman parte de la estructura "
-    "principal), si las hay. Usa el botón 'Extract all molecules' / "
-    "'Extract one molecule' para elegir si quieres todas las copias de los "
-    "tipos marcados o solo una — útil para aislar una única molécula de una "
-    "caja combinada (p. ej. para usarla después en el paso 'Structure'). "
-    "'Extract one molecule' identifica la molécula completa por su "
-    "conectividad química, no por residuo — un polímero de varios "
-    "monómeros con el mismo nombre de residuo (p. ej. 1P3HT, 2P3HT, "
-    "3P3HT…) se extrae entero, no solo el primer monómero. No "
-    "genera topología ni avanza el flujo, y no es obligatorio usarla; puedes "
-    "correrla varias veces con distintos archivos para ir armando piezas "
-    "individuales."
+    "Cleanup tool: load any structure or box file (.pdb or .gro), review "
+    "what molecule types it contains, and check the ones you want to "
+    "KEEP — everything else is discarded. By default, everything is kept "
+    "except HETATM molecules (crystallographic water, ions, ligands, or "
+    "other residues that aren't part of the main structure), if any. Use "
+    "the 'Extract all molecules' / 'Extract one molecule' button to choose "
+    "whether you want every copy of the checked types or just one — useful "
+    "for isolating a single molecule out of a combined box (e.g. to use "
+    "later in the 'Structure' step). 'Extract one molecule' identifies the "
+    "whole molecule by its chemical connectivity, not by residue — a "
+    "polymer split across several monomers sharing the same residue name "
+    "(e.g. 1P3HT, 2P3HT, 3P3HT…) gets extracted whole, not just the first "
+    "monomer. This doesn't generate a topology or advance the pipeline, "
+    "and using it isn't required; you can run it several times against "
+    "different files to build up individual pieces."
 )
 
 _HETATM_HINT = (
-    "Se detectaron moléculas HETATM (no forman parte de la estructura "
-    "principal — p. ej. agua cristalográfica, iones o ligandos): {names}. "
-    "Por defecto quedaron excluidas de la selección; márcalas de nuevo si "
-    "las necesitas."
+    "HETATM molecules were detected (not part of the main structure — e.g. "
+    "crystallographic water, ions, or ligands): {names}. They were excluded "
+    "from the selection by default; check them again if you need them."
 )
 
 
@@ -83,7 +81,7 @@ class CleanupToolWidget(QWidget):
     """
 
     def __init__(
-        self, project: Project, gmx_env: dict[str, str], parent: QWidget | None = None
+        self, project: Project | None, gmx_env: dict[str, str], parent: QWidget | None = None
     ) -> None:
         super().__init__(parent)
         self.project = project
@@ -107,9 +105,9 @@ class CleanupToolWidget(QWidget):
         picker_row.addWidget(self._input_label, 1)
         picker_row.addWidget(browse_button)
 
-        select_all_button = QPushButton("Seleccionar todo")
+        select_all_button = QPushButton("Select all")
         select_all_button.clicked.connect(lambda: self._set_all_checked(True))
-        select_none_button = QPushButton("Deseleccionar todo")
+        select_none_button = QPushButton("Deselect all")
         select_none_button.clicked.connect(lambda: self._set_all_checked(False))
         self._extract_mode_button = QPushButton("Extract all molecules")
         self._extract_mode_button.setCheckable(True)
@@ -122,7 +120,7 @@ class CleanupToolWidget(QWidget):
 
         self._residue_list_layout = QVBoxLayout()
 
-        self._save_button = QPushButton("Guardar selección…")
+        self._save_button = QPushButton("Save selection…")
         self._save_button.setEnabled(False)
         self._save_button.clicked.connect(self._on_save_clicked)
 
@@ -222,7 +220,7 @@ class CleanupToolWidget(QWidget):
 
     def _refresh_preview(self) -> None:
         if not self._atom_positions:
-            self._viewer.show_message("Selecciona un archivo para previsualizar.")
+            self._viewer.show_message("Select a file to preview.")
             return
         residues_to_keep = {
             name for name, checkbox in self._residue_checkboxes.items() if checkbox.isChecked()
@@ -230,9 +228,7 @@ class CleanupToolWidget(QWidget):
         if self._extract_mode_button.isChecked():
             fragment = self._first_matching_fragment(residues_to_keep)
             if fragment is None:
-                self._viewer.show_message(
-                    "Ningún fragmento conectado coincide con los tipos marcados."
-                )
+                self._viewer.show_message("No connected fragment matches the checked types.")
                 return
             self._viewer.set_atoms(fragment_to_atom_positions(fragment))
             return
@@ -251,7 +247,7 @@ class CleanupToolWidget(QWidget):
             return None
         if self._fragments is None:
             assert self._input_path is not None
-            self._status_label.setText("Calculando conectividad molecular…")
+            self._status_label.setText("Computing molecular connectivity…")
             QApplication.processEvents()
             self._fragments = compute_fragments(self._input_path)
             self._status_label.setText("")
@@ -265,14 +261,17 @@ class CleanupToolWidget(QWidget):
 
     def _prompt_save_path(self) -> Path | None:
         assert self._input_path is not None
-        cleanup_dir = self.project.root / "cleanup"
-        cleanup_dir.mkdir(exist_ok=True)
+        if self.project is not None:
+            cleanup_dir = self.project.root / "cleanup"
+            cleanup_dir.mkdir(exist_ok=True)
+        else:
+            cleanup_dir = self._input_path.parent
         suggested_name = f"{self._input_path.stem}_cleaned{self._input_path.suffix}"
         suggested_path = cleanup_dir / suggested_name
         is_pdb = self._input_path.suffix.lower() == ".pdb"
         file_filter = "PDB files (*.pdb)" if is_pdb else "GRO files (*.gro)"
         path_str, _ = QFileDialog.getSaveFileName(
-            self, "Guardar archivo limpio", str(suggested_path), file_filter
+            self, "Save cleaned file", str(suggested_path), file_filter
         )
         return Path(path_str) if path_str else None
 
@@ -283,7 +282,7 @@ class CleanupToolWidget(QWidget):
         }
 
         if not residues_to_keep:
-            self._status_label.setText("Selecciona al menos un tipo de molécula antes de guardar.")
+            self._status_label.setText("Select at least one molecule type before saving.")
             return
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -291,9 +290,7 @@ class CleanupToolWidget(QWidget):
         if self._extract_mode_button.isChecked():
             fragment = self._first_matching_fragment(residues_to_keep)
             if fragment is None:
-                self._status_label.setText(
-                    "Ningún fragmento conectado coincide con los tipos marcados."
-                )
+                self._status_label.setText("No connected fragment matches the checked types.")
                 return
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
@@ -305,4 +302,4 @@ class CleanupToolWidget(QWidget):
             else:
                 shutil.copyfile(self._input_path, output_path)
 
-        self._status_label.setText(f"Guardado en: {output_path}")
+        self._status_label.setText(f"Saved to: {output_path}")

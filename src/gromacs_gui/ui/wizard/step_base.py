@@ -126,8 +126,21 @@ class StepBase(QWidget):
     def _on_error(self, message: str) -> None:
         self._fail(message)
 
+    def on_all_commands_finished(self) -> None:
+        """Optional hook for subclasses that need pure-Python post-processing
+        after every gmx command in the sequence has succeeded but before the
+        step is recorded as done (e.g. merging several generated topology
+        files into one combined topol.top). May raise; doing so fails the
+        step the same way a failed gmx command would.
+        """
+
     def _finish_successfully(self) -> None:
         self.run_button.setEnabled(True)
+        try:
+            self.on_all_commands_finished()
+        except Exception as exc:
+            self._fail(str(exc))
+            return
         self.project.record_step_finished(self.step_name, output_files=self.output_files())
         self.log_console.append_line("[step completed successfully]", "info")
 

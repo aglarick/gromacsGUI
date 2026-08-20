@@ -16,8 +16,8 @@ class StepIonsWidget(StepBase):
     step_name = "ions"
 
     DESCRIPTION = (
-        "Reemplaza algunas moléculas de solvente con iones, para neutralizar "
-        "la carga eléctrica total del sistema."
+        "Replaces some solvent molecules with ions, to neutralize the "
+        "system's overall electric charge."
     )
 
     def __init__(

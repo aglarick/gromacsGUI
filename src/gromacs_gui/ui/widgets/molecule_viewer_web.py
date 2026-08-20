@@ -112,7 +112,7 @@ class MoleculeViewerWeb(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._stack)
 
-        self.show_message("Selecciona un archivo para previsualizar.")
+        self.show_message("Select a file to preview.")
 
     def _on_load_finished(self, ok: bool) -> None:
         self._page_ready = ok
@@ -137,7 +137,7 @@ class MoleculeViewerWeb(QWidget):
 
     def set_atoms(self, atoms: list[AtomPosition]) -> None:
         if not atoms:
-            self.show_message("Nada seleccionado para guardar.")
+            self.show_message("Nothing selected to save.")
             return
         self._stack.setCurrentWidget(self._view)
         self._send_pdb(format_atoms_as_pdb(atoms))

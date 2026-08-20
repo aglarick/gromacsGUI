@@ -3,9 +3,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFileDialog,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from gromacs_gui.core.project import Project
+from gromacs_gui.ui.wizard.steps.step_cleanup import CleanupToolWidget
 from gromacs_gui.ui.wizard.wizard_window import WizardWindow
 from gromacs_gui.utils.settings import (
     GmxEnvironmentError,
@@ -22,6 +23,10 @@ from gromacs_gui.utils.settings import (
     find_gmx_binary,
     resolve_gmx_environment,
 )
+
+# Sidebar row 0 is "0. Cleanup" (always enabled), row 1 is the first entry
+# of STEP_ORDER ("structure") - see WizardWindow._step_row_start.
+_STRUCTURE_ROW = 1
 
 
 class MainWindow(QMainWindow):
@@ -34,30 +39,27 @@ class MainWindow(QMainWindow):
         self.project: Project | None = None
         self.gmx_env: dict[str, str] | None = None
 
-        self.setCentralWidget(self._build_welcome_page())
+        self.setCentralWidget(self._build_startup_page())
 
-    def _build_welcome_page(self) -> QWidget:
+    def _build_startup_page(self) -> QWidget:
+        """No project folder is needed to use the cleanup tool, so the app
+        opens straight into it - a project is only requested once the user
+        actually wants to move on to Structure (step 1).
+        """
         page = QWidget(self)
-        title = QLabel("GromacsGUI", page)
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        subtitle = QLabel(
-            "Choose an empty folder to start a new simulation project, or an\n"
-            "existing project folder to resume it.",
-            page,
-        )
-        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        open_button = QPushButton("Open or Create Project Folder…", page)
-        open_button.clicked.connect(self._on_open_project_clicked)
+        continue_button = QPushButton("Continue to Structure (Step 1) →", page)
+        continue_button.clicked.connect(self._on_continue_to_structure_clicked)
+        continue_row = QHBoxLayout()
+        continue_row.addStretch(1)
+        continue_row.addWidget(continue_button)
 
         layout = QVBoxLayout(page)
-        layout.addStretch(1)
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
-        layout.addWidget(open_button, alignment=Qt.AlignmentFlag.AlignCenter)
-        layout.addStretch(1)
+        layout.addWidget(QLabel("GromacsGUI", page))
+        layout.addLayout(continue_row)
+        layout.addWidget(CleanupToolWidget(None, {}, page), 1)
         return page
 
-    def _on_open_project_clicked(self) -> None:
+    def _on_continue_to_structure_clicked(self) -> None:
         env = self._ensure_gmx_configured()
         if env is None:
             return
@@ -78,7 +80,7 @@ class MainWindow(QMainWindow):
 
         self.project = project
         self.gmx_env = env
-        self.setCentralWidget(WizardWindow(project, env, self))
+        self.setCentralWidget(WizardWindow(project, env, self, initial_row=_STRUCTURE_ROW))
 
     def _ensure_gmx_configured(self) -> dict[str, str] | None:
         if self.settings.gmxrc_path:
