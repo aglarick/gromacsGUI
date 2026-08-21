@@ -24,15 +24,19 @@ def _wait_for_step_done(qtbot, project, step_name, timeout=60000):
     assert record.state == StepState.DONE, record.error_message
 
 
-def test_wizard_ui_pipeline_cleanup_through_structure(qtbot, tmp_path, gmx_environment):
+def test_wizard_ui_pipeline_cleanup_through_structure(
+    qtbot, tmp_path, gmx_environment, monkeypatch
+):
     """Drives the real wizard step widgets (not just the command builders)
-    the same way a user clicking 'Run' would, against a real gmx build.
-
-    Stops after Structure: Box/Solvate/Ions still expect Structure's old
-    single-file output (structure/processed.gro) and haven't been updated
-    for the new multi-molecule output layout yet (structure/mol_<i>.*) -
-    that's follow-up work, not part of this round's scope.
+    the same way a user clicking 'Test system' would, against a real gmx
+    build - including the real grompp consistency check Structure now runs
+    on finish. The post-check dialogs are monkeypatched out (not just their
+    QMessageBox.exec(), the whole prompt methods) purely because a real
+    modal would block this unattended test forever waiting for a click;
+    grompp itself still runs for real.
     """
+    monkeypatch.setattr(StepStructureWidget, "_prompt_accept_system", lambda self: False)
+    monkeypatch.setattr(StepStructureWidget, "_prompt_inconsistent_system", lambda self: None)
     env = with_gmx_defaults(gmx_environment)
     project = Project.create(tmp_path / "myproj")
 
@@ -72,3 +76,6 @@ def test_wizard_ui_pipeline_cleanup_through_structure(qtbot, tmp_path, gmx_envir
     assert "[ moleculetype ]" in top_text
     assert "[ molecules ]" in top_text
     assert (project.root / "topology" / "posre_mol0.itp").is_file()
+
+    combined_gro = project.step_dir("structure") / "processed.gro"
+    assert combined_gro.is_file()  # written by the grompp consistency check

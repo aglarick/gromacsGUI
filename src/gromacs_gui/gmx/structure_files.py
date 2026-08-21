@@ -80,6 +80,30 @@ def format_atoms_as_pdb(atoms: list[AtomPosition]) -> str:
     return "".join(lines)
 
 
+def write_gro(
+    path: Path,
+    atoms: list[AtomPosition],
+    box_nm: tuple[float, float, float],
+    title: str = "Combined system",
+) -> None:
+    """Write parsed atoms back out as a minimal valid .gro file - like
+    format_atoms_as_pdb, but for callers (e.g. Structure's grompp
+    consistency check) that need a real coordinate file grompp can read,
+    not just something to feed to a viewer.
+    """
+    lines = [title, str(len(atoms))]
+    instance_order: dict[str, int] = {}
+    for serial, atom in enumerate(atoms, start=1):
+        res_seq = instance_order.setdefault(atom.instance_key, len(instance_order) + 1)
+        lines.append(
+            f"{res_seq % 100000:>5}{atom.residue_name[:5]:<5}{atom.atom_name[:5]:>5}"
+            f"{serial % 100000:>5}"
+            f"{atom.x / 10:>8.3f}{atom.y / 10:>8.3f}{atom.z / 10:>8.3f}"
+        )
+    lines.append(f"{box_nm[0]:>10.5f}{box_nm[1]:>10.5f}{box_nm[2]:>10.5f}")
+    Path(path).write_text("\n".join(lines) + "\n")
+
+
 def select_preview_atoms(
     atoms: list[AtomPosition], residue_names_to_keep: set[str]
 ) -> list[AtomPosition]:

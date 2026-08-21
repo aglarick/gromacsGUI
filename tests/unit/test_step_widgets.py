@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from gromacs_gui.core.project import Project
 from gromacs_gui.ui.wizard.steps.step_box import StepBoxWidget
@@ -92,6 +95,33 @@ def test_step_structure_custom_ff_folder_requires_itp_on_every_row(qtbot, tmp_pa
     assert widget.is_valid() is True
 
 
+def test_step_structure_custom_ff_browse_row_hidden_until_selected(qtbot, tmp_path):
+    project = Project.create(tmp_path / "proj")
+    widget = StepStructureWidget(project, _fake_gmx_env(tmp_path))
+    qtbot.addWidget(widget)
+
+    assert widget._custom_ff_button.isHidden() is True
+    assert widget._custom_ff_label.isHidden() is True
+
+    custom_index = widget.force_field_combo.findData("__custom_ff__")
+    widget.force_field_combo.setCurrentIndex(custom_index)
+
+    assert widget._custom_ff_button.isHidden() is False
+    assert widget._custom_ff_label.isHidden() is False
+
+
+def test_step_structure_add_molecule_button_stays_below_last_row(qtbot, tmp_path):
+    project = Project.create(tmp_path / "proj")
+    widget = StepStructureWidget(project, _fake_gmx_env(tmp_path))
+    qtbot.addWidget(widget)
+
+    widget.add_row()
+    widget.add_row()
+
+    last_index = widget._rows_layout.count() - 1
+    assert widget._rows_layout.itemAt(last_index).widget() is widget._add_row_button
+
+
 def test_step_structure_add_and_remove_row(qtbot, tmp_path):
     project = Project.create(tmp_path / "proj")
     widget = StepStructureWidget(project, _fake_gmx_env(tmp_path))
@@ -175,6 +205,61 @@ def test_step_structure_combines_pdb2gmx_and_itp_rows_into_one_topology(qtbot, t
     assert (project.root / "topology" / "lig.itp").is_file()
     assert (project.step_dir("structure") / "mol_0.gro").read_text() == "fake gro 0\n"
     assert (project.step_dir("structure") / "mol_2.pdb").is_file()
+
+
+def _prepare_single_itp_row(widget, tmp_path):
+    pdb = tmp_path / "lig.pdb"
+    pdb.write_text("ATOM      1  C1  LIG A   1      0.000   0.000   0.000\n")
+    itp = tmp_path / "lig.itp"
+    itp.write_text("[ moleculetype ]\nLIG   3\n\n[ atoms ]\n1 c3 1 LIG C1 1 0.0\n")
+    row = widget._rows[0]
+    row.structure_path = pdb
+    row.itp_path = itp
+    return row
+
+
+def test_step_structure_verify_before_finish_accepts_and_advances(qtbot, tmp_path, monkeypatch):
+    project = Project.create(tmp_path / "proj")
+    widget = StepStructureWidget(project, _fake_gmx_env(tmp_path))
+    qtbot.addWidget(widget)
+    _prepare_single_itp_row(widget, tmp_path)
+    assert widget.is_valid() is True
+    widget.on_all_commands_finished()
+
+    monkeypatch.setattr(
+        "gromacs_gui.ui.wizard.steps.step_structure.subprocess.run",
+        lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout="grompp ok\n", stderr=""),
+    )
+    monkeypatch.setattr(widget, "_prompt_accept_system", lambda: True)
+    advanced = []
+    widget.advance_requested.connect(advanced.append)
+
+    widget.verify_before_finish()
+
+    assert advanced == ["box"]
+    assert (project.step_dir("structure") / "processed.gro").is_file()
+
+
+def test_step_structure_verify_before_finish_raises_on_grompp_failure(qtbot, tmp_path, monkeypatch):
+    project = Project.create(tmp_path / "proj")
+    widget = StepStructureWidget(project, _fake_gmx_env(tmp_path))
+    qtbot.addWidget(widget)
+    _prepare_single_itp_row(widget, tmp_path)
+    assert widget.is_valid() is True
+    widget.on_all_commands_finished()
+
+    monkeypatch.setattr(
+        "gromacs_gui.ui.wizard.steps.step_structure.subprocess.run",
+        lambda *a, **k: subprocess.CompletedProcess(a, 1, stdout="", stderr="Fatal error\n"),
+    )
+    monkeypatch.setattr(widget, "_prompt_inconsistent_system", lambda: None)
+    advanced = []
+    widget.advance_requested.connect(advanced.append)
+
+    with pytest.raises(RuntimeError):
+        widget.verify_before_finish()
+
+    assert advanced == []
 
 
 def test_step_box_invalid_before_structure_step_ran(qtbot, tmp_path):

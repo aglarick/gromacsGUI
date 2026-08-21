@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QFormLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget
 
 from gromacs_gui.core.project import Project
@@ -28,6 +29,11 @@ class StepBase(QWidget):
 
     step_name: str = ""  # must match an entry in core.step_state.STEP_ORDER
     DESCRIPTION: str = ""  # plain-language explanation shown above the form
+    RUN_BUTTON_LABEL: str = "Run"
+
+    # Emitted with a step_name to ask the wizard to switch to it - e.g.
+    # Structure's "Test system" flow asking to jump to Box once accepted.
+    advance_requested = Signal(str)
 
     def __init__(
         self, project: Project, gmx_env: dict[str, str], parent: QWidget | None = None
@@ -37,7 +43,7 @@ class StepBase(QWidget):
         self.gmx_env = gmx_env
 
         self.form_layout = QFormLayout()
-        self.run_button = QPushButton("Run", self)
+        self.run_button = QPushButton(self.RUN_BUTTON_LABEL, self)
         self.run_button.clicked.connect(self._on_run_clicked)
         self.log_console = LogConsole(self)
 
@@ -134,10 +140,19 @@ class StepBase(QWidget):
         step the same way a failed gmx command would.
         """
 
+    def verify_before_finish(self) -> None:
+        """Optional hook: an extra synchronous check that runs after
+        on_all_commands_finished() succeeds but before the step is recorded
+        as done - e.g. Structure's grompp consistency check, which also owns
+        deciding whether to prompt the user to advance. Raise to fail the
+        step the same way a failed gmx command would. Default: no-op.
+        """
+
     def _finish_successfully(self) -> None:
         self.run_button.setEnabled(True)
         try:
             self.on_all_commands_finished()
+            self.verify_before_finish()
         except Exception as exc:
             self._fail(str(exc))
             return

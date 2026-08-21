@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -9,12 +11,16 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
+from gromacs_gui.core import conventions
 from gromacs_gui.core.project import Project
+from gromacs_gui.core.step_state import STEP_ORDER
+from gromacs_gui.gmx.commands.grompp import build_grompp_command
 from gromacs_gui.gmx.commands.pdb2gmx import build_pdb2gmx_command
 from gromacs_gui.gmx.forcefields import (
     gmxdata_top_dir,
@@ -22,6 +28,7 @@ from gromacs_gui.gmx.forcefields import (
     list_water_models,
     list_water_models_in_folder,
 )
+from gromacs_gui.gmx.structure_files import AtomPosition, read_atom_positions, write_gro
 from gromacs_gui.gmx.topology import (
     build_combined_topology,
     extract_generated_topology_chunk,
@@ -30,7 +37,17 @@ from gromacs_gui.gmx.topology import (
     rename_moleculetype,
     rename_posre_include,
 )
+from gromacs_gui.mdp.defaults import default_mdp_path
 from gromacs_gui.ui.wizard.step_base import StepBase, StepCommand
+from gromacs_gui.utils.settings import find_gmx_binary
+
+# Padding (nm) added around the bounding box of every row's raw coordinates
+# to build a synthetic box just large enough for grompp's consistency check
+# (Verlet cutoffs need the box edge to clear 2x the cutoff radius) - this is
+# not a real simulation box, just enough for grompp to preprocess the
+# topology without erroring on box size.
+_VERIFICATION_BOX_PADDING_NM = 2.0
+_VERIFICATION_MIN_BOX_NM = 3.0
 
 # Tools like LigParGen or ATB often generate their own force field folder
 # (e.g. oplsaam.ff), distinct from GROMACS's bundled ones - picking a
@@ -148,6 +165,7 @@ class StepStructureWidget(StepBase):
     step_name = "structure"
 
     DESCRIPTION = _STEP_DESCRIPTION
+    RUN_BUTTON_LABEL = "Test system"
 
     def __init__(
         self, project: Project, gmx_env: dict[str, str], parent: QWidget | None = None
@@ -163,11 +181,11 @@ class StepStructureWidget(StepBase):
         self.form_layout.addRow("Force field:", self.force_field_combo)
 
         self._custom_ff_label = QLabel("No folder selected")
-        custom_ff_button = QPushButton("Browse…")
-        custom_ff_button.clicked.connect(self._on_browse_custom_ff_clicked)
+        self._custom_ff_button = QPushButton("Browse…")
+        self._custom_ff_button.clicked.connect(self._on_browse_custom_ff_clicked)
         custom_ff_row = QHBoxLayout()
         custom_ff_row.addWidget(self._custom_ff_label, 1)
-        custom_ff_row.addWidget(custom_ff_button)
+        custom_ff_row.addWidget(self._custom_ff_button)
         self._custom_ff_field_label = QLabel("Custom .ff folder:")
         self.form_layout.addRow(self._custom_ff_field_label, custom_ff_row)
 
@@ -177,10 +195,6 @@ class StepStructureWidget(StepBase):
 
         self._update_custom_ff_row_visibility()
 
-        add_row_button = QPushButton("Add molecule")
-        add_row_button.clicked.connect(self.add_row)
-        self.form_layout.addRow(add_row_button)
-
         separator = QFrame(self)
         separator.setFrameShape(QFrame.Shape.HLine)
         separator.setFrameShadow(QFrame.Shadow.Sunken)
@@ -188,6 +202,10 @@ class StepStructureWidget(StepBase):
 
         self._rows_layout = QVBoxLayout()
         self.form_layout.addRow(self._rows_layout)
+
+        self._add_row_button = QPushButton("Add molecule")
+        self._add_row_button.clicked.connect(self.add_row)
+        self._rows_layout.addWidget(self._add_row_button)
 
         self.add_row()
 
@@ -203,6 +221,7 @@ class StepStructureWidget(StepBase):
         is_custom = self.force_field_is_custom()
         self._custom_ff_field_label.setVisible(is_custom)
         self._custom_ff_label.setVisible(is_custom)
+        self._custom_ff_button.setVisible(is_custom)
 
     def _on_force_field_changed(self) -> None:
         self._update_custom_ff_row_visibility()
@@ -266,7 +285,9 @@ class StepStructureWidget(StepBase):
     def add_row(self) -> None:
         row = _MoleculeRow(self, self)
         self._rows.append(row)
-        self._rows_layout.addWidget(row)
+        # Keep "Add molecule" pinned as the last widget, below every row.
+        insert_index = self._rows_layout.indexOf(self._add_row_button)
+        self._rows_layout.insertWidget(insert_index, row)
 
     def remove_row(self, row: _MoleculeRow) -> None:
         if len(self._rows) <= 1:
@@ -397,4 +418,111 @@ class StepStructureWidget(StepBase):
             path = structure_dir / f"mol_{i}.{suffix}"
             if path.is_file():
                 files.append(str(path.relative_to(root)))
+        combined_gro = structure_dir / conventions.STRUCTURE_GRO
+        if combined_gro.is_file():
+            files.append(str(combined_gro.relative_to(root)))
         return files
+
+    # --- grompp consistency check (runs after on_all_commands_finished) ---
+    def verify_before_finish(self) -> None:
+        self._run_grompp_check()
+
+    def _run_grompp_check(self) -> None:
+        structure_dir = self.project.step_dir(self.step_name)
+        combined_gro = self._write_combined_structure_gro(structure_dir)
+        topology_top = self.project.root / "topology" / conventions.TOPOLOGY_TOP
+        check_tpr = structure_dir / "consistency_check.tpr"
+
+        args = build_grompp_command(
+            default_mdp_path("ions"),
+            combined_gro,
+            topology_top,
+            check_tpr,
+            maxwarn=1,
+        )
+        gmx_path = find_gmx_binary(self.gmx_env) or "gmx"
+        result = subprocess.run(
+            [gmx_path, *args],
+            cwd=str(self.project.root),
+            env=self.gmx_env,
+            capture_output=True,
+            text=True,
+        )
+        stream = "stdout" if result.returncode == 0 else "stderr"
+        for line in (result.stdout + result.stderr).splitlines():
+            self.log_console.append_line(line, stream)
+
+        if result.returncode != 0:
+            self._prompt_inconsistent_system()
+            raise RuntimeError("grompp reported an inconsistent system")
+
+        if self._prompt_accept_system():
+            self._request_next_step()
+
+    def _write_combined_structure_gro(self, structure_dir: Path) -> Path:
+        """Concatenate every row's already-copied mol_<i>.* coordinates into
+        one combined structure/processed.gro, matching the [molecules] list
+        (count 1 each) that _combine_topologies() just wrote - grompp needs
+        one coordinate file whose atom order/count matches the topology, and
+        this also happens to be the conventional single-file output Box
+        (step 2) already expects.
+        """
+        combined_atoms: list[AtomPosition] = []
+        for i, row in enumerate(self._rows):
+            assert row.structure_path is not None
+            suffix = (
+                "gro" if row.itp_path is None else row.structure_path.suffix.lower().lstrip(".")
+            )
+            mol_path = structure_dir / f"mol_{i}.{suffix}"
+            atoms = read_atom_positions(mol_path)
+            combined_atoms.extend(
+                replace(atom, instance_key=f"row{i}:{atom.instance_key}") for atom in atoms
+            )
+
+        combined_gro = structure_dir / conventions.STRUCTURE_GRO
+        write_gro(combined_gro, combined_atoms, self._verification_box(combined_atoms))
+        return combined_gro
+
+    @staticmethod
+    def _verification_box(atoms: list[AtomPosition]) -> tuple[float, float, float]:
+        if not atoms:
+            return (_VERIFICATION_MIN_BOX_NM, _VERIFICATION_MIN_BOX_NM, _VERIFICATION_MIN_BOX_NM)
+        pad = _VERIFICATION_BOX_PADDING_NM
+
+        def dim(values: list[float]) -> float:
+            return max((max(values) - min(values)) / 10 + pad, _VERIFICATION_MIN_BOX_NM)
+
+        return (
+            dim([a.x for a in atoms]),
+            dim([a.y for a in atoms]),
+            dim([a.z for a in atoms]),
+        )
+
+    def _request_next_step(self) -> None:
+        index = STEP_ORDER.index(self.step_name)
+        if index + 1 < len(STEP_ORDER):
+            self.advance_requested.emit(STEP_ORDER[index + 1])
+
+    def _prompt_accept_system(self) -> bool:
+        """Shows the post-check dialog and returns whether the user chose to
+        advance to Box. Split out from _run_grompp_check() so tests can
+        monkeypatch this one method to skip the blocking modal dialog.
+        """
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("System accepted")
+        dialog.setText("System accepted. Would you like to go to step 2?")
+        dialog.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        accept_button = dialog.addButton("Accept", QMessageBox.ButtonRole.AcceptRole)
+        dialog.setDefaultButton(accept_button)
+        dialog.exec()
+        return dialog.clickedButton() is accept_button
+
+    def _prompt_inconsistent_system(self) -> None:
+        """Split out from _run_grompp_check() so tests can monkeypatch this
+        one method to skip the blocking modal dialog.
+        """
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Inconsistent system")
+        dialog.setText("The provided files does not define a consistent system")
+        dialog.addButton("Accept", QMessageBox.ButtonRole.AcceptRole)
+        dialog.exec()

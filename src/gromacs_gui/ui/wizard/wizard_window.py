@@ -17,6 +17,7 @@ from gromacs_gui.core.capabilities import Capability, detect_capabilities
 from gromacs_gui.core.pipeline import is_step_ready
 from gromacs_gui.core.project import Project
 from gromacs_gui.core.step_state import STEP_ORDER
+from gromacs_gui.ui.wizard.step_base import StepBase
 from gromacs_gui.ui.wizard.steps.step_box import StepBoxWidget
 from gromacs_gui.ui.wizard.steps.step_cleanup import CleanupToolWidget
 from gromacs_gui.ui.wizard.steps.step_ions import StepIonsWidget
@@ -201,6 +202,13 @@ class WizardWindow(QWidget):
         if item is self._md_item:
             self._prompt_for_project()
 
+    def _on_step_advance_requested(self, step_name: str) -> None:
+        item = self._step_items.get(step_name)
+        if item is None:
+            return
+        self._sidebar.setCurrentItem(item)
+        self._show_item_page(item)
+
     def _prompt_for_project(self) -> None:
         result = self._request_project()
         if result is None:
@@ -236,6 +244,8 @@ class WizardWindow(QWidget):
                 if widget_cls is not None
                 else _NotBuiltYetPage(step_name, self)
             )
+            if isinstance(page, StepBase):
+                page.advance_requested.connect(self._on_step_advance_requested)
             self._add_page(item, page)
             self._step_items[step_name] = item
 
